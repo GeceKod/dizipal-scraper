@@ -5,3 +5,4 @@ PySocks==1.7.1
 playwright==1.47.0
 playwright-stealth==1.0.6
 cloudscraper==1.2.71
+fake_useragent
