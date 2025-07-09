@@ -4,9 +4,7 @@ on:
   push:
     branches:
       - main
-  schedule:
-    - cron: '0 0 * * *'  # Her gün gece yarısı çalışır
-  workflow_dispatch:
+  workflow_dispatch:  # Manuel çalıştırma için
 
 jobs:
   kazi:
@@ -16,19 +14,20 @@ jobs:
 
     steps:
       - name: Kodu çek
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Tüm geçmişi çek
 
       - name: Python'u kur
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
       - name: Bağımlılıkları yükle
         run: |
           python -m pip install --upgrade pip
-          pip install requests cloudscraper beautifulsoup4 pycryptodome PySocks
+          pip install playwright requests beautifulsoup4 pycryptodome PySocks
+          playwright install --with-deps
 
       - name: Kazıyıcıyı çalıştır
         run: |
