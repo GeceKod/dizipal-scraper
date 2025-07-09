@@ -93,26 +93,92 @@ class ContentX(ExtractorApi):
                 # Hata ayıklama için iframe içeriğini kaydet
                 video_param = parse_qs(urlparse(url).query).get('v', [None])[0]
                 filename = f"iframe_debug_{video_param or 'unknown'}.html"
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(i_source)
-                logger.info(f"Iframe içeriği '{filename}' dosyasına kaydedildi.")
+                try:
+                    with open(filename, "w", encoding="utf-8") as f:
+                        f.write(i_source)
+                    logger.info(f"Iframe içeriği '{filename}' dosyasına kaydedildi.")
+                except Exception as e:
+                    logger.error(f"Iframe içeriği kaydedilemedi: {e}")
 
-                # Altyazıları çıkarma
+                # Altyazıları çıkarma (ContentXExtractor.kt ile uyumlu)
                 sub_urls = set()
                 altyazilar = []
-                for match in re.finditer(r'"file":"([^"]+\.vtt[^"]*)","label":"([^"]+)"', i_source, re.IGNORECASE):
-                    sub_url = match.group(1).replace("\\", "")
-                    sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç")
+                for match in re.finditer(r'"file":"((?:\\"|[^"])+)","label":"((?:\\"|[^"])+)"', i_source, re.IGNORECASE):
+                    sub_url = match.group(1).replace("\\/", "/").replace("\\u0026", "&").replace("\\", "")
+                    sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç").replace("\\u011f", "ğ").replace("\\u015f", "ş")
                     if sub_url not in sub_urls:
                         sub_urls.add(sub_url)
                         altyazilar.append({"dil": sub_lang, "url": urljoin(self.main_url, sub_url)})
                         if subtitle_callback:
                             await subtitle_callback(altyazilar[-1])
+                logger.info(f"Altyazılar: {sub_urls}")
 
                 # Video linkini çıkarma
                 linkler = []
-                # Yöntem 1: Direkt video linki arama (daha esnek regex)
-                video_file_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4|ts)[^"]*)"', i_source, re.IGNORECASE)
+                # Yöntem 1: window.openPlayer ile source2.php'den link alma (ContentXExtractor.kt mantığı)
+                open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source, re.IGNORECASE)
+                if open_player_match:
+                    i_extract_val = open_player_match.group(1)
+                    base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                    source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                    logger.info(f"ContentX: source2.php'ye istek gönderiliyor: {source_url}")
+
+                    try:
+                        await page.goto(source_url, timeout=90000)
+                        await page.wait_for_load_state("load")
+                        vid_source = await page.content()
+
+                        # source2.php içeriğini kaydet
+                        try:
+                            with open("source2_debug.html", "w", encoding="utf-8") as f:
+                                f.write(vid_source)
+                            logger.info("source2.php içeriği 'source2_debug.html' dosyasına kaydedildi.")
+                        except Exception as e:
+                            logger.error(f"source2.php içeriği kaydedilemedi: {e}")
+
+                        vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
+                        if vid_extract_match:
+                            m3u_link = vid_extract_match.group(1).replace("\\", "")
+                            logger.info(f"ContentX: source2.php içinden video linki bulundu: {m3u_link}")
+                            linkler.append({"kaynak": "ContentX (Source2 Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
+                            if callback:
+                                await callback(linkler[-1])
+                        else:
+                            logger.warning("ContentX: source2.php içinde video linki bulunamadı.")
+
+                        # Türkçe dublaj kontrolü (ContentXExtractor.kt'den)
+                        dublaj_match = re.search(r',"([^']+)","Türkçe"', i_source, re.IGNORECASE)
+                        if dublaj_match:
+                            dublaj_val = dublaj_match.group(1)
+                            dublaj_source_url = f"{base_iframe_url}/source2.php?v={dublaj_val}"
+                            logger.info(f"ContentX: Türkçe dublaj için source2.php'ye istek gönderiliyor: {dublaj_source_url}")
+                            await page.goto(dublaj_source_url, timeout=90000)
+                            await page.wait_for_load_state("load")
+                            dublaj_source = await page.content()
+
+                            # Dublaj içeriğini kaydet
+                            try:
+                                with open("dublaj_source2_debug.html", "w", encoding="utf-8") as f:
+                                    f.write(dublaj_source)
+                                logger.info("Dublaj source2.php içeriği 'dublaj_source2_debug.html' dosyasına kaydedildi.")
+                            except Exception as e:
+                                logger.error(f"Dublaj source2.php içeriği kaydedilemedi: {e}")
+
+                            dublaj_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', dublaj_source, re.IGNORECASE)
+                            if dublaj_extract_match:
+                                dublaj_link = dublaj_extract_match.group(1).replace("\\", "")
+                                logger.info(f"ContentX: Türkçe dublaj linki bulundu: {dublaj_link}")
+                                linkler.append({"kaynak": "ContentX (Dublaj)", "isim": "ContentX Dublaj", "url": dublaj_link, "tur": "m3u8"})
+                                if callback:
+                                    await callback(linkler[-1])
+
+                    except Exception as e:
+                        logger.error(f"ContentX: source2.php isteği başarısız: {e}")
+                    await browser.close()
+                    return {"linkler": linkler, "altyazilar": altyazilar}
+
+                # Yöntem 2: Direkt video linki arama
+                video_file_match = re.search(r'"file":"((?:\\"|[^"])+\\.(?:m3u8|mp4|ts)[^"]*)"', i_source, re.IGNORECASE)
                 if video_file_match:
                     m3u_link = video_file_match.group(1).replace("\\", "")
                     logger.info(f"ContentX: Direkt video linki bulundu: {m3u_link}")
@@ -122,41 +188,14 @@ class ContentX(ExtractorApi):
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
-                # Yöntem 2: Gizlenmiş JS içindeki linki arama
-                obfuscated_match = re.search(r'sources:\s*\[\{file:"(https?://[^"]+\.(?:m3u8|mp4|ts)[^"]*)"', i_source, re.IGNORECASE)
+                # Yöntem 3: Gizlenmiş JS içindeki linki arama
+                obfuscated_match = re.search(r'sources:\s*\[\{file:"((?:\\"|[^"])+\\.(?:m3u8|mp4|ts)[^"]*)"', i_source, re.IGNORECASE)
                 if obfuscated_match:
                     m3u_link = obfuscated_match.group(1).replace("\\", "")
                     logger.info(f"ContentX: Gizlenmiş JS içinden link bulundu: {m3u_link}")
                     linkler.append({"kaynak": "ContentX (Obfuscated JS)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
                     if callback:
                         await callback(linkler[-1])
-                    await browser.close()
-                    return {"linkler": linkler, "altyazilar": altyazilar}
-
-                # Yöntem 3: window.openPlayer kontrolü
-                open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source, re.IGNORECASE)
-                if open_player_match:
-                    i_extract_val = open_player_match.group(1)
-                    base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-                    source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                    logger.info(f"ContentX: source2.php'ye istek gönderiliyor: {source_url}")
-
-                    await page.goto(source_url, timeout=90000)
-                    await page.wait_for_load_state("load")
-                    vid_source = await page.content()
-
-                    # source2.php içeriğini kaydet
-                    with open("source2_debug.html", "w", encoding="utf-8") as f:
-                        f.write(vid_source)
-                    logger.info("source2.php içeriği 'source2_debug.html' dosyasına kaydedildi.")
-
-                    vid_extract_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4|ts)[^"]*)"', vid_source, re.IGNORECASE)
-                    if vid_extract_match:
-                        m3u_link = vid_extract_match.group(1).replace("\\", "")
-                        logger.info(f"ContentX: source2.php içinden video linki bulundu: {m3u_link}")
-                        linkler.append({"kaynak": "ContentX (Source2 Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                        if callback:
-                            await callback(linkler[-1])
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
@@ -173,26 +212,49 @@ class ContentX(ExtractorApi):
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
-                # Yöntem 5: Cloudscraper fallback (opsiyonel)
+                # Yöntem 5: Cloudscraper fallback
                 if cloudscraper:
                     logger.info("Cloudscraper ile fallback deneniyor")
                     scraper = cloudscraper.create_scraper()
                     response = scraper.get(url, headers=headers)
                     if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        video_file_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4|ts)[^"]*)"', response.text, re.IGNORECASE)
-                        if video_file_match:
-                            m3u_link = video_file_match.group(1).replace("\\", "")
-                            logger.info(f"ContentX: Cloudscraper ile video linki bulundu: {m3u_link}")
-                            linkler.append({"kaynak": "ContentX (Cloudscraper)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                            if callback:
-                                await callback(linkler[-1])
+                        i_source_scraper = response.text
+                        open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source_scraper, re.IGNORECASE)
+                        if open_player_match:
+                            i_extract_val = open_player_match.group(1)
+                            source_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}/source2.php?v={i_extract_val}"
+                            logger.info(f"ContentX: Cloudscraper ile source2.php'ye istek gönderiliyor: {source_url}")
+                            source_response = scraper.get(source_url, headers=headers)
+                            if source_response.status_code == 200:
+                                vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', source_response.text, re.IGNORECASE)
+                                if vid_extract_match:
+                                    m3u_link = vid_extract_match.group(1).replace("\\", "")
+                                    logger.info(f"ContentX: Cloudscraper ile video linki bulundu: {m3u_link}")
+                                    linkler.append({"kaynak": "ContentX (Cloudscraper)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
+                                    if callback:
+                                        await callback(linkler[-1])
+
+                        # Türkçe dublaj kontrolü
+                        dublaj_match = re.search(r',"([^']+)","Türkçe"', i_source_scraper, re.IGNORECASE)
+                        if dublaj_match:
+                            dublaj_val = dublaj_match.group(1)
+                            dublaj_source_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}/source2.php?v={dublaj_val}"
+                            logger.info(f"ContentX: Cloudscraper ile Türkçe dublaj için source2.php'ye istek gönderiliyor: {dublaj_source_url}")
+                            dublaj_response = scraper.get(dublaj_source_url, headers=headers)
+                            if dublaj_response.status_code == 200:
+                                dublaj_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', dublaj_response.text, re.IGNORECASE)
+                                if dublaj_extract_match:
+                                    dublaj_link = dublaj_extract_match.group(1).replace("\\", "")
+                                    logger.info(f"ContentX: Cloudscraper ile Türkçe dublaj linki bulundu: {dublaj_link}")
+                                    linkler.append({"kaynak": "ContentX (Cloudscraper Dublaj)", "isim": "ContentX Dublaj", "url": dublaj_link, "tur": "m3u8"})
+                                    if callback:
+                                        await callback(linkler[-1])
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
                 # Ek hata ayıklama: Potansiyel JS fonksiyonlarını logla
                 js_functions = re.findall(r'\w+\s*\(\s*[\'"]([^\'"]+)[\'"][^)]*\)', i_source)
-                logger.info(f"Potansiyel JS fonksiyonları: {js_functions[:10]}")  # İlk 10 fonksiyonu logla
+                logger.info(f"Potansiyel JS fonksiyonları: {js_functions[:10]}")
                 logger.warning(f"ContentX Hatası: Video linki bulunamadı. Sayfa içeriği değişmiş olabilir: {url}")
                 await browser.close()
                 return {"linkler": [], "altyazilar": altyazilar}
