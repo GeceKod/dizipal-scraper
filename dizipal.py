@@ -50,10 +50,9 @@ class ExtractorApi:
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         raise NotImplementedError
 
-# GÜNCELLENMİŞ ContentX Extractor sınıfı
-class ContentX(ExtractorApi):
-    name = "ContentX"
-    main_url = "https://contentx.me"
+# Gelişmiş Video Extractor Sınıfı (Tüm servisleri destekler)
+class UniversalExtractor(ExtractorApi):
+    name = "UniversalExtractor"
     requires_referer = True
 
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None, context=None):
@@ -71,6 +70,7 @@ class ContentX(ExtractorApi):
                 try:
                     await page.goto(url, timeout=90000)
                     await page.wait_for_load_state("load")
+                    await page.wait_for_timeout(2000)  # Ek bekleme süresi
                 except Exception as e:
                     logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
                     await browser.close()
@@ -80,10 +80,18 @@ class ContentX(ExtractorApi):
                     page = await context.new_page()
                     await page.goto(url, timeout=90000)
                     await page.wait_for_load_state("load")
+                    await page.wait_for_timeout(2000)  # Ek bekleme süresi
 
                 i_source = await page.content()
+                
+                # Debug için içerik kaydet
+                domain = urlparse(url).netloc.replace(".", "_")
+                filename = f"iframe_debug_{domain}.html"
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(i_source)
+                logger.info(f"Iframe içeriği '{filename}' dosyasına kaydedildi.")
 
-                # Altyazıları çıkar
+                # 1. Altyazıları çıkar
                 sub_urls = set()
                 altyazilar = []
                 for match in re.finditer(r'"file":"([^"]+\.vtt[^"]*)","label":"([^"]+)"', i_source):
@@ -91,81 +99,138 @@ class ContentX(ExtractorApi):
                     sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç")
                     if sub_url not in sub_urls:
                         sub_urls.add(sub_url)
-                        altyazilar.append({"dil": sub_lang, "url": urljoin(self.main_url, sub_url)})
+                        altyazilar.append({"dil": sub_lang, "url": sub_url})
                         if subtitle_callback:
                             await subtitle_callback(altyazilar[-1])
 
                 linkler = []
                 
-                # 1. window.openPlayer değerini çıkar
-                open_player_match = re.search(r"window\.openPlayer\('([^']+)'", i_source)
-                if not open_player_match:
-                    logger.warning("openPlayer değeri bulunamadı")
-                    await browser.close()
-                    return {"linkler": [], "altyazilar": altyazilar}
+                # 2. Farklı video kaynaklarını tespit et
+                found_links = False
                 
-                i_extract_val = open_player_match.group(1)
-                logger.info(f"openPlayer değeri: {i_extract_val}")
+                # Yöntem 1: Direkt m3u8 linki
+                m3u8_match = re.search(r'(https?://[^\s"\'<>]+?\.m3u8[^\s"\'<>]*)', i_source)
+                if m3u8_match:
+                    m3u_link = m3u8_match.group(1)
+                    logger.info(f"Direkt M3U8 linki bulundu: {m3u_link}")
+                    linkler.append({
+                        "kaynak": "Direct M3U8",
+                        "isim": "Video Akışı",
+                        "url": m3u_link,
+                        "tur": "m3u8"
+                    })
+                    found_links = True
                 
-                # 2. source2.php'ye istek gönder
-                base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-                source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                logger.info(f"source2.php'ye istek gönderiliyor: {source_url}")
-                
-                await page.goto(source_url, timeout=90000)
-                await page.wait_for_load_state("load")
-                vid_source = await page.content()
-                
-                # 3. Videoyu source2 yanıtından çıkar
-                vid_extract_match = re.search(r'"file":"([^"]+)"', vid_source)
-                if not vid_extract_match:
-                    logger.warning("source2.php içinde video linki bulunamadı")
-                    await browser.close()
-                    return {"linkler": [], "altyazilar": altyazilar}
-                
-                m3u_link = vid_extract_match.group(1).replace("\\", "")
-                logger.info(f"Bulunan video linki: {m3u_link}")
-                
-                linkler.append({
-                    "kaynak": "ContentX (Source2 Video)",
-                    "isim": "ContentX Video",
-                    "url": m3u_link,
-                    "tur": "m3u8"
-                })
-                
-                if callback: 
-                    await callback(linkler[-1])
-                
-                # 4. Dublaj varsa onu da ekle
-                dub_match = re.search(r""","([^']+)","Türkçe""", i_source)
-                if dub_match:
-                    dub_val = dub_match.group(1)
-                    logger.info(f"Dublaj değeri: {dub_val}")
-                    dub_source_url = f"{base_iframe_url}/source2.php?v={dub_val}"
-                    
-                    await page.goto(dub_source_url, timeout=90000)
-                    await page.wait_for_load_state("load")
-                    dub_source = await page.content()
-                    
-                    dub_extract_match = re.search(r'"file":"([^"]+)"', dub_source)
-                    if dub_extract_match:
-                        dub_link = dub_extract_match.group(1).replace("\\", "")
-                        logger.info(f"Bulunan dublaj linki: {dub_link}")
+                # Yöntem 2: window.openPlayer (ContentX)
+                if not found_links:
+                    open_player_match = re.search(r"window\.openPlayer\('([^']+)'", i_source)
+                    if open_player_match:
+                        i_extract_val = open_player_match.group(1)
+                        logger.info(f"openPlayer değeri: {i_extract_val}")
                         
-                        linkler.append({
-                            "kaynak": "ContentX (Dublaj)",
-                            "isim": "ContentX Dublaj",
-                            "url": dub_link,
-                            "tur": "m3u8"
-                        })
+                        base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                        source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                        logger.info(f"source2.php'ye istek gönderiliyor: {source_url}")
+                        
+                        await page.goto(source_url, timeout=90000)
+                        await page.wait_for_load_state("load")
+                        vid_source = await page.content()
+                        
+                        vid_extract_match = re.search(r'"file":"([^"]+)"', vid_source)
+                        if vid_extract_match:
+                            m3u_link = vid_extract_match.group(1).replace("\\", "")
+                            logger.info(f"Bulunan video linki: {m3u_link}")
+                            linkler.append({
+                                "kaynak": "ContentX (Source2)",
+                                "isim": "Video Akışı",
+                                "url": m3u_link,
+                                "tur": "m3u8"
+                            })
+                            found_links = True
+                
+                # Yöntem 3: JWPlayer setup
+                if not found_links:
+                    jw_setup_match = re.search(r'jwplayer\("player"\)\.setup\((\{.*?\})\);', i_source, re.DOTALL)
+                    if jw_setup_match:
+                        jw_config = jw_setup_match.group(1)
+                        try:
+                            # JSON'u düzgün hale getir
+                            jw_config = jw_config.replace("'", '"')
+                            jw_config = jw_config.replace("file:", '"file":')
+                            jw_config = jw_config.replace("label:", '"label":')
+                            jw_data = json.loads(jw_config)
+                            
+                            if "file" in jw_data:
+                                m3u_link = jw_data["file"]
+                                logger.info(f"JWPlayer linki bulundu: {m3u_link}")
+                                linkler.append({
+                                    "kaynak": "JWPlayer",
+                                    "isim": "Video Akışı",
+                                    "url": m3u_link,
+                                    "tur": "m3u8"
+                                })
+                                found_links = True
+                        except json.JSONDecodeError:
+                            logger.warning("JWPlayer config JSON parse edilemedi")
+                
+                # Yöntem 4: VideoJS
+                if not found_links:
+                    videojs_match = re.search(r'videojs\(".*?"\)\.src\((\{.*?\})\);', i_source, re.DOTALL)
+                    if videojs_match:
+                        videojs_config = videojs_match.group(1)
+                        try:
+                            # JSON'u düzgün hale getir
+                            videojs_config = videojs_config.replace("'", '"')
+                            videojs_config = videojs_config.replace("src:", '"src":')
+                            videojs_config = videojs_config.replace("type:", '"type":')
+                            videojs_data = json.loads(videojs_config)
+                            
+                            if "src" in videojs_data:
+                                m3u_link = videojs_data["src"]
+                                logger.info(f"VideoJS linki bulundu: {m3u_link}")
+                                linkler.append({
+                                    "kaynak": "VideoJS",
+                                    "isim": "Video Akışı",
+                                    "url": m3u_link,
+                                    "tur": "m3u8"
+                                })
+                                found_links = True
+                        except json.JSONDecodeError:
+                            logger.warning("VideoJS config JSON parse edilemedi")
+                
+                # Yöntem 5: data-setup özelliği
+                if not found_links:
+                    data_setup_match = re.search(r'<video.*?data-setup=\'(\{.*?\})\'', i_source, re.DOTALL)
+                    if data_setup_match:
+                        data_setup_config = data_setup_match.group(1)
+                        try:
+                            data_setup_data = json.loads(data_setup_config)
+                            if "sources" in data_setup_data:
+                                for source in data_setup_data["sources"]:
+                                    if "src" in source:
+                                        m3u_link = source["src"]
+                                        logger.info(f"data-setup linki bulundu: {m3u_link}")
+                                        linkler.append({
+                                            "kaynak": "data-setup",
+                                            "isim": "Video Akışı",
+                                            "url": m3u_link,
+                                            "tur": "m3u8"
+                                        })
+                                        found_links = True
+                        except json.JSONDecodeError:
+                            logger.warning("data-setup config JSON parse edilemedi")
+                
+                # Sonuçları işle
+                if linkler:
+                    for link in linkler:
                         if callback: 
-                            await callback(linkler[-1])
+                            await callback(link)
                 
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
 
             except Exception as e:
-                logger.error(f"ContentX çıkarma başarısız: {e}")
+                logger.error(f"Video çıkarma başarısız: {e}")
                 if browser:
                     await browser.close()
                 return {"linkler": [], "altyazilar": []}
@@ -181,7 +246,7 @@ class DiziPalOrijinal:
         self.session_cookies = None
         self.c_key = None
         self.c_value = None
-        self.extractors = [ContentX()]
+        self.extractors = [UniversalExtractor()]
         HEADERS['Referer'] = self.main_url + "/"
 
     async def init_session(self):
@@ -201,7 +266,7 @@ class DiziPalOrijinal:
                 except Exception as e:
                     logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
                     await browser.close()
-                    browser = await p.firefox.launch(headless=True)
+                    browser = await p.firefox.launch(headeless=True)
                     context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
                     await stealth_async(context)
                     page = await context.new_page()
@@ -269,7 +334,7 @@ class DiziPalOrijinal:
                 
                 for extractor in self.extractors:
                     result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback, context=context)
-                    if result["linkler"] or result["altyazilar"]:
+                    if result["linkler"]:
                         await browser.close()
                         return True
                 await browser.close()
@@ -358,8 +423,11 @@ class DiziPalOrijinal:
                             async def callback(link):
                                 video_data["linkler"].append(link)
                             logger.info(f"Bölüm işleniyor: {episode_url}")
-                            await self.load_links(episode_url, False, subtitle_callback, callback)
-                            series_data["bolumler"].append({"url": episode_url, "video_bilgisi": video_data})
+                            success = await self.load_links(episode_url, False, subtitle_callback, callback)
+                            if success:
+                                series_data["bolumler"].append({"url": episode_url, "video_bilgisi": video_data})
+                            else:
+                                logger.warning(f"Bölüm için link bulunamadı: {episode_url}")
 
                         all_data.append(series_data)
 
