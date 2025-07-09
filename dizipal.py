@@ -10,8 +10,6 @@ from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Hash import SHA512
 import base64
-import hmac
-import hashlib
 import logging
 
 # Loglama ayarları
@@ -29,13 +27,16 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
 }
 
-# Şifre çözme fonksiyonu
+# Şifre çözme fonksiyonu (Kotlin'deki decrypt fonksiyonuyla birebir uyumlu)
 def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
     try:
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
+        
+        # Kotlin'deki PBEKeySpec ve SecretKeyFactory mantığı
         key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
+        
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
         padding_len = plaintext[-1]
@@ -50,9 +51,10 @@ class ExtractorApi:
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         raise NotImplementedError
 
-# Gelişmiş Video Extractor Sınıfı (Tüm servisleri destekler)
-class UniversalExtractor(ExtractorApi):
-    name = "UniversalExtractor"
+# Güncellenmiş ContentX Extractor sınıfı
+class ContentX(ExtractorApi):
+    name = "ContentX"
+    main_url = "https://contentx.me"
     requires_referer = True
 
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None, context=None):
@@ -62,15 +64,14 @@ class UniversalExtractor(ExtractorApi):
             browser = None
             try:
                 logger.info(f"Iframe URL'sine erişiliyor: {url}")
-                # Proxy ile deneme
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
                 context = context or await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
                 await stealth_async(context)
                 page = await context.new_page()
+                
                 try:
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
-                    await page.wait_for_timeout(2000)  # Ek bekleme süresi
+                    await page.goto(url, timeout=120000)  # Zaman aşımını artır
+                    await page.wait_for_load_state("networkidle", timeout=60000)  # Ek bekleme
                 except Exception as e:
                     logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
                     await browser.close()
@@ -78,164 +79,52 @@ class UniversalExtractor(ExtractorApi):
                     context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
                     await stealth_async(context)
                     page = await context.new_page()
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
-                    await page.wait_for_timeout(2000)  # Ek bekleme süresi
+                    await page.goto(url, timeout=120000)
+                    await page.wait_for_load_state("networkidle", timeout=60000)
 
                 i_source = await page.content()
-                
-                # Debug için içerik kaydet
-                domain = urlparse(url).netloc.replace(".", "_")
-                filename = f"iframe_debug_{domain}.html"
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(i_source)
-                logger.info(f"Iframe içeriği '{filename}' dosyasına kaydedildi.")
 
-                # 1. Altyazıları çıkar
+                # Kotlin'deki regex'le birebir uyumlu altyazı çıkarma
                 sub_urls = set()
                 altyazilar = []
-                for match in re.finditer(r'"file":"([^"]+\.vtt[^"]*)","label":"([^"]+)"', i_source):
-                    sub_url = match.group(1).replace("\\", "")
-                    sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç")
+                for match in re.finditer(r'"file":"((?:\\"|[^"])+)","label":"((?:\\"|[^"])+)"', i_source):
+                    sub_url = match.group(1).replace("\\/", "/").replace("\\u0026", "&").replace("\\", "")
+                    sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç").replace("\\u011f", "ğ").replace("\\u015f", "ş")
                     if sub_url not in sub_urls:
                         sub_urls.add(sub_url)
-                        altyazilar.append({"dil": sub_lang, "url": sub_url})
+                        altyazilar.append({"dil": sub_lang, "url": urljoin(self.main_url, sub_url)})
                         if subtitle_callback:
                             await subtitle_callback(altyazilar[-1])
 
+                # Kotlin'deki mantıkla video linki çıkarma
                 linkler = []
-                
-                # 2. Farklı video kaynaklarını tespit et
-                found_links = False
-                
-                # Yöntem 1: Direkt m3u8 linki
-                m3u8_match = re.search(r'(https?://[^\s"\'<>]+?\.m3u8[^\s"\'<>]*)', i_source)
-                if m3u8_match:
-                    m3u_link = m3u8_match.group(1)
-                    logger.info(f"Direkt M3U8 linki bulundu: {m3u_link}")
-                    linkler.append({
-                        "kaynak": "Direct M3U8",
-                        "isim": "Video Akışı",
-                        "url": m3u_link,
-                        "tur": "m3u8"
-                    })
-                    found_links = True
-                
-                # Yöntem 2: window.openPlayer (ContentX)
-                if not found_links:
-                    open_player_match = re.search(r"window\.openPlayer\('([^']+)'", i_source)
-                    if open_player_match:
-                        i_extract_val = open_player_match.group(1)
-                        logger.info(f"openPlayer değeri: {i_extract_val}")
-                        
-                        base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-                        source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                        logger.info(f"source2.php'ye istek gönderiliyor: {source_url}")
-                        
-                        await page.goto(source_url, timeout=90000)
-                        await page.wait_for_load_state("load")
-                        vid_source = await page.content()
-                        
-                        vid_extract_match = re.search(r'"file":"([^"]+)"', vid_source)
-                        if vid_extract_match:
-                            m3u_link = vid_extract_match.group(1).replace("\\", "")
-                            logger.info(f"Bulunan video linki: {m3u_link}")
-                            linkler.append({
-                                "kaynak": "ContentX (Source2)",
-                                "isim": "Video Akışı",
-                                "url": m3u_link,
-                                "tur": "m3u8"
-                            })
-                            found_links = True
-                
-                # Yöntem 3: JWPlayer setup
-                if not found_links:
-                    jw_setup_match = re.search(r'jwplayer\("player"\)\.setup\((\{.*?\})\);', i_source, re.DOTALL)
-                    if jw_setup_match:
-                        jw_config = jw_setup_match.group(1)
-                        try:
-                            # JSON'u düzgün hale getir
-                            jw_config = jw_config.replace("'", '"')
-                            jw_config = jw_config.replace("file:", '"file":')
-                            jw_config = jw_config.replace("label:", '"label":')
-                            jw_data = json.loads(jw_config)
-                            
-                            if "file" in jw_data:
-                                m3u_link = jw_data["file"]
-                                logger.info(f"JWPlayer linki bulundu: {m3u_link}")
-                                linkler.append({
-                                    "kaynak": "JWPlayer",
-                                    "isim": "Video Akışı",
-                                    "url": m3u_link,
-                                    "tur": "m3u8"
-                                })
-                                found_links = True
-                        except json.JSONDecodeError:
-                            logger.warning("JWPlayer config JSON parse edilemedi")
-                
-                # Yöntem 4: VideoJS
-                if not found_links:
-                    videojs_match = re.search(r'videojs\(".*?"\)\.src\((\{.*?\})\);', i_source, re.DOTALL)
-                    if videojs_match:
-                        videojs_config = videojs_match.group(1)
-                        try:
-                            # JSON'u düzgün hale getir
-                            videojs_config = videojs_config.replace("'", '"')
-                            videojs_config = videojs_config.replace("src:", '"src":')
-                            videojs_config = videojs_config.replace("type:", '"type":')
-                            videojs_data = json.loads(videojs_config)
-                            
-                            if "src" in videojs_data:
-                                m3u_link = videojs_data["src"]
-                                logger.info(f"VideoJS linki bulundu: {m3u_link}")
-                                linkler.append({
-                                    "kaynak": "VideoJS",
-                                    "isim": "Video Akışı",
-                                    "url": m3u_link,
-                                    "tur": "m3u8"
-                                })
-                                found_links = True
-                        except json.JSONDecodeError:
-                            logger.warning("VideoJS config JSON parse edilemedi")
-                
-                # Yöntem 5: data-setup özelliği
-                if not found_links:
-                    data_setup_match = re.search(r'<video.*?data-setup=\'(\{.*?\})\'', i_source, re.DOTALL)
-                    if data_setup_match:
-                        data_setup_config = data_setup_match.group(1)
-                        try:
-                            data_setup_data = json.loads(data_setup_config)
-                            if "sources" in data_setup_data:
-                                for source in data_setup_data["sources"]:
-                                    if "src" in source:
-                                        m3u_link = source["src"]
-                                        logger.info(f"data-setup linki bulundu: {m3u_link}")
-                                        linkler.append({
-                                            "kaynak": "data-setup",
-                                            "isim": "Video Akışı",
-                                            "url": m3u_link,
-                                            "tur": "m3u8"
-                                        })
-                                        found_links = True
-                        except json.JSONDecodeError:
-                            logger.warning("data-setup config JSON parse edilemedi")
-                
-                # Sonuçları işle
-                if linkler:
-                    for link in linkler:
-                        if callback: 
-                            await callback(link)
+                open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source)
+                if open_player_match:
+                    i_extract_val = open_player_match.group(1)
+                    base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
+                    source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                    
+                    await page.goto(source_url, timeout=60000)
+                    await page.wait_for_load_state("networkidle")
+                    vid_source = await page.content()
+                    
+                    vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source)
+                    if vid_extract_match:
+                        m3u_link = vid_extract_match.group(1).replace("\\", "")
+                        linkler.append({"kaynak": "ContentX", "isim": "Video", "url": m3u_link, "tur": "m3u8"})
+                        if callback:
+                            await callback(linkler[-1])
                 
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
 
             except Exception as e:
-                logger.error(f"Video çıkarma başarısız: {e}")
+                logger.error(f"ContentX çıkarma başarısız: {e}")
                 if browser:
                     await browser.close()
                 return {"linkler": [], "altyazilar": []}
 
-# DiziPalOrijinal sınıfı
+# DiziPalOrijinal sınıfı (Kotlin'deki DiziPalOrijinal sınıfıyla uyumlu)
 class DiziPalOrijinal:
     main_url = "https://dizipal935.com"
     name = "DiziPalOrijinal"
@@ -246,8 +135,9 @@ class DiziPalOrijinal:
         self.session_cookies = None
         self.c_key = None
         self.c_value = None
-        self.extractors = [UniversalExtractor()]
+        self.extractors = [ContentX()]
         HEADERS['Referer'] = self.main_url + "/"
+        self.cloudflare_bypass = True  # Cloudflare bypass etmek için
 
     async def init_session(self):
         if self.session_cookies and self.c_key and self.c_value:
@@ -257,29 +147,48 @@ class DiziPalOrijinal:
             browser = None
             try:
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
-                context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                context = await browser.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    bypass_csp=True,
+                    # Cloudflare bypass için ek ayarlar
+                    java_script_enabled=True,
+                    ignore_https_errors=True,
+                    viewport={"width": 1920, "height": 1080}
+                )
                 await stealth_async(context)
                 page = await context.new_page()
+                
                 try:
-                    await page.goto(self.main_url, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    await page.goto(self.main_url, timeout=120000)
+                    # Cloudflare için ek bekleme
+                    await page.wait_for_selector("input[name=cKey]", state="attached", timeout=60000)
                 except Exception as e:
                     logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
                     await browser.close()
-                    browser = await p.firefox.launch(headeless=True)
-                    context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                    browser = await p.firefox.launch(headless=True)
+                    context = await browser.new_context(
+                        user_agent=HEADERS["User-Agent"],
+                        bypass_csp=True,
+                        java_script_enabled=True,
+                        ignore_https_errors=True,
+                        viewport={"width": 1920, "height": 1080}
+                    )
                     await stealth_async(context)
                     page = await context.new_page()
-                    await page.goto(self.main_url, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    await page.goto(self.main_url, timeout=120000)
+                    await page.wait_for_selector("input[name=cKey]", state="attached", timeout=60000)
 
                 self.session_cookies = {cookie["name"]: cookie["value"] for cookie in await context.cookies()}
-                soup = BeautifulSoup(await page.content(), 'html.parser')
+                content = await page.content()
+                soup = BeautifulSoup(content, 'html.parser')
+                
                 self.c_key = soup.select_one("input[name=cKey]")['value'] if soup.select_one("input[name=cKey]") else None
                 self.c_value = soup.select_one("input[name=cValue]")['value'] if soup.select_one("input[name=cValue]") else None
                 logger.info(f"cKey: {self.c_key}, cValue: {self.c_value}")
+                
                 if not self.c_key or not self.c_value:
                     raise ValueError("cKey veya cValue alınamadı")
+                
                 await browser.close()
             except Exception as e:
                 logger.error(f"Oturum başlatma başarısız: {e}")
@@ -288,55 +197,109 @@ class DiziPalOrijinal:
                 raise
 
     async def load_links(self, data, is_casting, subtitle_callback, callback):
+        await self.init_session()
         async with async_playwright() as p:
             browser = None
             try:
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
-                context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                context = await browser.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    bypass_csp=True,
+                    java_script_enabled=True,
+                    ignore_https_errors=True,
+                    viewport={"width": 1920, "height": 1080}
+                )
                 await stealth_async(context)
+                
+                # Kotlin'deki sessionCookies mantığı
                 for name, value in self.session_cookies.items():
-                    await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                    await context.add_cookies([{
+                        "name": name, 
+                        "value": value, 
+                        "url": self.main_url,
+                        "domain": urlparse(self.main_url).hostname,
+                        "path": "/"
+                    }])
+                
                 page = await context.new_page()
                 try:
                     logger.info(f"Link sayfasına erişiliyor: {data}")
-                    await page.goto(data, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    await page.goto(data, timeout=120000)
+                    # Cloudflare için ek bekleme
+                    await page.wait_for_selector("div[data-rm-k]", state="attached", timeout=60000)
                 except Exception as e:
                     logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
                     await browser.close()
                     browser = await p.firefox.launch(headless=True)
-                    context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                    context = await browser.new_context(
+                        user_agent=HEADERS["User-Agent"],
+                        bypass_csp=True,
+                        java_script_enabled=True,
+                        ignore_https_errors=True,
+                        viewport={"width": 1920, "height": 1080}
+                    )
                     await stealth_async(context)
                     for name, value in self.session_cookies.items():
-                        await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                        await context.add_cookies([{
+                            "name": name, 
+                            "value": value, 
+                            "url": self.main_url,
+                            "domain": urlparse(self.main_url).hostname,
+                            "path": "/"
+                        }])
                     page = await context.new_page()
-                    await page.goto(data, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    await page.goto(data, timeout=120000)
+                    await page.wait_for_selector("div[data-rm-k]", state="attached", timeout=60000)
 
-                soup = BeautifulSoup(await page.content(), 'html.parser')
+                # Kotlin'deki hiddenJson çıkarma mantığı
+                content = await page.content()
+                soup = BeautifulSoup(content, 'html.parser')
                 hidden_json_tag = soup.select_one("div[data-rm-k]")
+                
                 if not hidden_json_tag:
-                    logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
+                    # Hata ayıklama için sayfa kaynağını kaydet
+                    with open("error_page.html", "w", encoding="utf-8") as f:
+                        f.write(content)
+                    logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı. Sayfa kaynağı 'error_page.html' dosyasına kaydedildi.")
+                    await browser.close()
+                    return False
+
+                hidden_json = hidden_json_tag.text
+                logger.info(f"Şifreli JSON bulundu: {hidden_json[:100]}...")
+                
+                try:
+                    obj = json.loads(hidden_json)
+                    ciphertext = obj['ciphertext']
+                    iv = obj['iv']
+                    salt = obj['salt']
+                except Exception as e:
+                    logger.error(f"JSON parse hatası: {e}")
                     await browser.close()
                     return False
                 
-                hidden_json = hidden_json_tag.text
-                obj = json.loads(hidden_json)
-                
-                ciphertext = obj['ciphertext']
-                iv = obj['iv']
-                salt = obj['salt']
                 passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
                 
-                decrypted_content = decrypt(passphrase, salt, iv, ciphertext)
-                iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
-                logger.info(f"Çözülen iframe URL: {iframe_url}")
+                try:
+                    decrypted_content = decrypt(passphrase, salt, iv, ciphertext)
+                    logger.info(f"Çözülen içerik: {decrypted_content[:100]}...")
+                    
+                    iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
+                    logger.info(f"Çözülen iframe URL: {iframe_url}")
+                    
+                    for extractor in self.extractors:
+                        result = await extractor.get_url(
+                            iframe_url, 
+                            referer=data, 
+                            subtitle_callback=subtitle_callback, 
+                            callback=callback, 
+                            context=context
+                        )
+                        if result["linkler"]:
+                            await browser.close()
+                            return True
+                except Exception as e:
+                    logger.error(f"Şifre çözme veya iframe işleme hatası: {e}")
                 
-                for extractor in self.extractors:
-                    result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback, context=context)
-                    if result["linkler"]:
-                        await browser.close()
-                        return True
                 await browser.close()
                 return False
 
@@ -347,54 +310,79 @@ class DiziPalOrijinal:
                 return False
 
     async def calistir(self):
+        """Ana çalıştırma fonksiyonu (Kotlin'deki mainPage mantığı)"""
         await self.init_session()
         url = f"{self.main_url}/yabanci-dizi-izle"
         async with async_playwright() as p:
             browser = None
             try:
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
-                context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                context = await browser.new_context(
+                    user_agent=HEADERS["User-Agent"],
+                    bypass_csp=True,
+                    java_script_enabled=True,
+                    ignore_https_errors=True,
+                    viewport={"width": 1920, "height": 1080}
+                )
                 await stealth_async(context)
+                
+                # Oturum çerezlerini ekle
                 for name, value in self.session_cookies.items():
-                    await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                    await context.add_cookies([{
+                        "name": name, 
+                        "value": value, 
+                        "url": self.main_url,
+                        "domain": urlparse(self.main_url).hostname,
+                        "path": "/"
+                    }])
+                
                 page = await context.new_page()
                 try:
                     logger.info(f"Ana sayfaya erişiliyor: {url}")
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    await page.goto(url, timeout=120000)
+                    await page.wait_for_selector("div.prm-borderb", state="attached", timeout=60000)
                 except Exception as e:
                     logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
                     await browser.close()
                     browser = await p.firefox.launch(headless=True)
-                    context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                    context = await browser.new_context(
+                        user_agent=HEADERS["User-Agent"],
+                        bypass_csp=True,
+                        java_script_enabled=True,
+                        ignore_https_errors=True,
+                        viewport={"width": 1920, "height": 1080}
+                    )
                     await stealth_async(context)
                     for name, value in self.session_cookies.items():
-                        await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                        await context.add_cookies([{
+                            "name": name, 
+                            "value": value, 
+                            "url": self.main_url,
+                            "domain": urlparse(self.main_url).hostname,
+                            "path": "/"
+                        }])
                     page = await context.new_page()
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    await page.goto(url, timeout=120000)
+                    await page.wait_for_selector("div.prm-borderb", state="attached", timeout=60000)
 
-                soup = BeautifulSoup(await page.content(), 'html.parser')
+                content = await page.content()
+                soup = BeautifulSoup(content, 'html.parser')
                 series_divs = soup.select("div.prm-borderb")
                 logger.info(f"Ana sayfada bulunan öğe sayısı: {len(series_divs)}")
+                
                 all_data = []
                 processed_series_urls = set()
 
-                for item in series_divs:
+                for item in series_divs[:2]:  # Test için sadece ilk 2 öğe
                     try:
                         a_tag = item.select_one("a")
                         if not a_tag:
                             continue
+                            
                         raw_href = a_tag.get("href", "")
-                        series_href = ""
+                        # Kotlin'deki href dönüşüm mantığı
                         if "/bolum/" in raw_href:
-                            parts = raw_href.split('/')[2].split('-')
-                            if 'sezon' in parts and 'bolum' in parts:
-                                sezon_index = parts.index('sezon')
-                                series_name = '-'.join(parts[:sezon_index-1])
-                                series_href = f"/series/{series_name}"
-                            else:
-                                series_href = "/series/" + '-'.join(raw_href.split('/')[2].split('-')[:-4])
+                            series_href = "/series/" + re.sub(r'-\d+x.*$', '', raw_href.split('/')[2])
                         elif "/series/" in raw_href:
                             series_href = raw_href
                         else:
@@ -403,42 +391,56 @@ class DiziPalOrijinal:
                         series_url = urljoin(self.main_url, series_href)
                         if series_url in processed_series_urls:
                             continue
+                            
                         processed_series_urls.add(series_url)
-
                         title = item.select_one("img").get("alt", "Bilinmeyen Başlık")
                         logger.info(f"İşleniyor: {title} ({series_url})")
 
-                        await page.goto(series_url, timeout=90000)
-                        await page.wait_for_load_state("load")
-                        series_soup = BeautifulSoup(await page.content(), 'html.parser')
+                        await page.goto(series_url, timeout=60000)
+                        await page.wait_for_selector("a.text.block[data-dizipal-pageloader='true']", timeout=30000)
+                        
+                        series_content = await page.content()
+                        series_soup = BeautifulSoup(series_content, 'html.parser')
                         episode_links = series_soup.select("a.text.block[data-dizipal-pageloader='true']")
                         logger.info(f"  > {len(episode_links)} bölüm bulundu.")
 
                         series_data = {"baslik": title, "url": series_url, "bolumler": []}
-                        for ep_link in episode_links:
+                        
+                        for ep_link in episode_links[:1]:  # Test için sadece ilk bölüm
                             episode_url = urljoin(self.main_url, ep_link['href'])
                             video_data = {"linkler": [], "altyazilar": []}
+                            
                             async def subtitle_callback(subtitle):
                                 video_data["altyazilar"].append(subtitle)
-                            async def callback(link):
+                            
+                            async def link_callback(link):
                                 video_data["linkler"].append(link)
+                            
                             logger.info(f"Bölüm işleniyor: {episode_url}")
-                            success = await self.load_links(episode_url, False, subtitle_callback, callback)
+                            success = await self.load_links(
+                                episode_url, 
+                                False, 
+                                subtitle_callback, 
+                                link_callback
+                            )
+                            
                             if success:
-                                series_data["bolumler"].append({"url": episode_url, "video_bilgisi": video_data})
+                                series_data["bolumler"].append({
+                                    "url": episode_url, 
+                                    "video_bilgisi": video_data
+                                })
                             else:
                                 logger.warning(f"Bölüm için link bulunamadı: {episode_url}")
 
                         all_data.append(series_data)
 
                     except Exception as e:
-                        logger.error(f"Bir seri işlenirken hata oluştu: {e}")
-                        continue
+                        logger.error(f"Seri işlenirken hata: {e}")
 
                 await browser.close()
                 with open("dizipal_sonuclar.json", "w", encoding="utf-8") as f:
                     json.dump(all_data, f, ensure_ascii=False, indent=4)
-                logger.info("Tüm veriler 'dizipal_sonuclar.json' dosyasına kaydedildi.")
+                logger.info("Veriler 'dizipal_sonuclar.json' dosyasına kaydedildi.")
 
             except Exception as e:
                 logger.error(f"Ana sayfa kazıma hatası: {e}")
