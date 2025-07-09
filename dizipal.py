@@ -8,7 +8,7 @@ from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
-from Crypto.Hash import SHA512  # Gerekli modül içe aktarıldı
+from Crypto.Hash import SHA512
 import base64
 import hmac
 import hashlib
@@ -29,17 +29,15 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
 }
 
-# Şifre çözme fonksiyonu (DÜZELTİLDİ)
+# Şifre çözme fonksiyonu
 def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
     try:
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
-        # Hata veren hmac_hash_module parametresi SHA512 modülü ile değiştirildi
         key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
-        # PKCS7 padding'i manuel olarak kaldırma
         padding_len = plaintext[-1]
         plaintext = plaintext[:-padding_len]
         return plaintext.decode('utf-8')
@@ -52,7 +50,7 @@ class ExtractorApi:
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         raise NotImplementedError
 
-# ContentX Extractor sınıfı
+# ContentX Extractor sınıfı (GÜNCELLENDİ)
 class ContentX(ExtractorApi):
     name = "ContentX"
     main_url = "https://contentx.me"
@@ -68,7 +66,7 @@ class ContentX(ExtractorApi):
                 # Proxy ile deneme
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
                 context = context or await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                await stealth_async(context)  # Cloudflare bypass için stealth
+                await stealth_async(context)
                 page = await context.new_page()
                 try:
                     await page.goto(url, timeout=90000)
@@ -85,14 +83,12 @@ class ContentX(ExtractorApi):
 
                 i_source = await page.content()
 
-                # Hata ayıklama için iframe içeriğini kaydet
                 video_param = parse_qs(urlparse(url).query).get('v', [None])[0]
                 filename = f"iframe_debug_{video_param or 'unknown'}.html"
                 with open(filename, "w", encoding="utf-8") as f:
                     f.write(i_source)
                 logger.info(f"Iframe içeriği '{filename}' dosyasına kaydedildi.")
 
-                # Altyazıları çıkarma
                 sub_urls = set()
                 altyazilar = []
                 for match in re.finditer(r'"file":"([^"]+\.vtt[^"]*)","label":"([^"]+)"', i_source):
@@ -104,17 +100,27 @@ class ContentX(ExtractorApi):
                         if subtitle_callback:
                             await subtitle_callback(altyazilar[-1])
 
-                # Video linkini çıkarma
                 linkler = []
+                # YÖNTEM 1: Direkt video linki arama
                 video_file_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4)[^"]*)"', i_source)
                 if video_file_match:
                     m3u_link = video_file_match.group(1).replace("\\", "")
                     linkler.append({"kaynak": "ContentX (Direct Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                    if callback:
-                        await callback(linkler[-1])
+                    if callback: await callback(linkler[-1])
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
+                # YÖNTEM 2: Yeni eklenen kontrol. Gizlenmiş JS içindeki linki arama.
+                obfuscated_match = re.search(r'sources:\[\{file:"(https?://[^"]+\.m3u8[^"]*)"', i_source)
+                if obfuscated_match:
+                    m3u_link = obfuscated_match.group(1).replace("\\", "")
+                    logger.info(f"ContentX: Gizlenmiş JS içinden link bulundu: {m3u_link}")
+                    linkler.append({"kaynak": "ContentX (Obfuscated JS)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
+                    if callback: await callback(linkler[-1])
+                    await browser.close()
+                    return {"linkler": linkler, "altyazilar": altyazilar}
+
+                # YÖNTEM 3: Eski "openPlayer" metodunu arama
                 open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source)
                 if open_player_match:
                     i_extract_val = open_player_match.group(1)
@@ -126,7 +132,6 @@ class ContentX(ExtractorApi):
                     await page.wait_for_load_state("load")
                     vid_source = await page.content()
 
-                    # source2.php içeriğini kaydet
                     with open("source2_debug.html", "w", encoding="utf-8") as f:
                         f.write(vid_source)
                     logger.info("source2.php içeriği 'source2_debug.html' dosyasına kaydedildi.")
@@ -135,8 +140,7 @@ class ContentX(ExtractorApi):
                     if vid_extract_match:
                         m3u_link = vid_extract_match.group(1).replace("\\", "")
                         linkler.append({"kaynak": "ContentX (Source2 Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                        if callback:
-                            await callback(linkler[-1])
+                        if callback: await callback(linkler[-1])
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
@@ -173,7 +177,7 @@ class DiziPalOrijinal:
             try:
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
                 context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                await stealth_async(context)  # Cloudflare bypass için stealth
+                await stealth_async(context)
                 page = await context.new_page()
                 try:
                     await page.goto(self.main_url, timeout=90000)
@@ -203,14 +207,12 @@ class DiziPalOrijinal:
                 raise
 
     async def load_links(self, data, is_casting, subtitle_callback, callback):
-        # Gereksiz tekrarı önlemek için init_session çağrısı kaldırıldı.
-        # Bu fonksiyon artık oturumun `calistir` metodu tarafından başlatıldığını varsayar.
         async with async_playwright() as p:
             browser = None
             try:
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
                 context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                await stealth_async(context)  # Cloudflare bypass için stealth
+                await stealth_async(context)
                 for name, value in self.session_cookies.items():
                     await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
                 page = await context.new_page()
@@ -231,21 +233,24 @@ class DiziPalOrijinal:
                     await page.wait_for_load_state("load")
 
                 soup = BeautifulSoup(await page.content(), 'html.parser')
-                hidden_json = soup.select_one("div[data-rm-k]").text
+                hidden_json_tag = soup.select_one("div[data-rm-k]")
+                if not hidden_json_tag:
+                    logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
+                    await browser.close()
+                    return False
+                
+                hidden_json = hidden_json_tag.text
                 obj = json.loads(hidden_json)
-
-                # Şifre çözme parametreleri
+                
                 ciphertext = obj['ciphertext']
                 iv = obj['iv']
                 salt = obj['salt']
                 passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
-
-                # Şifre çözme
+                
                 decrypted_content = decrypt(passphrase, salt, iv, ciphertext)
                 iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
                 logger.info(f"Çözülen iframe URL: {iframe_url}")
-
-                # Extractor ile linkleri çıkarma
+                
                 for extractor in self.extractors:
                     result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback, context=context)
                     if result["linkler"] or result["altyazilar"]:
@@ -261,15 +266,14 @@ class DiziPalOrijinal:
                 return False
 
     async def calistir(self):
-        """Ana sayfadan dizileri kazı ve JSON olarak kaydet."""
-        await self.init_session() # Oturum burada, döngüden önce bir kez başlatılır
+        await self.init_session()
         url = f"{self.main_url}/yabanci-dizi-izle"
         async with async_playwright() as p:
             browser = None
             try:
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
                 context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                await stealth_async(context)  # Cloudflare bypass için stealth
+                await stealth_async(context)
                 for name, value in self.session_cookies.items():
                     await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
                 page = await context.new_page()
