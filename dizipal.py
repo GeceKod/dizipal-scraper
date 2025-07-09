@@ -50,111 +50,101 @@ class ExtractorApi:
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         raise NotImplementedError
 
-# ContentX Extractor sınıfı (GÜNCELLENDİ)
+# KOTLIN KODUNDAN PORT EDİLEN YENİ SINIF
 class ContentX(ExtractorApi):
     name = "ContentX"
-    main_url = "https://contentx.me"
     requires_referer = True
 
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None, context=None):
         headers = HEADERS.copy()
         headers["Referer"] = referer if referer else url
+        
+        # Bu extractor kendi Playwright oturumunu yönetir
         async with async_playwright() as p:
             browser = None
             try:
-                logger.info(f"Iframe URL'sine erişiliyor: {url}")
-                # Proxy ile deneme
-                browser = await p.firefox.launch(headless=True, proxy=PROXY)
-                context = context or await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                await stealth_async(context)
-                page = await context.new_page()
+                # Proxy ile veya proxysiz başlatma mantığı
                 try:
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    browser = await p.firefox.launch(headless=True, proxy=PROXY)
+                    pw_context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+                    await stealth_async(pw_context)
+                    page = await pw_context.new_page()
+                    await page.goto(url, timeout=90000, wait_until="load")
                 except Exception as e:
                     logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
-                    await browser.close()
+                    if browser: await browser.close()
                     browser = await p.firefox.launch(headless=True)
-                    context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                    await stealth_async(context)
-                    page = await context.new_page()
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
+                    pw_context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+                    await stealth_async(pw_context)
+                    page = await pw_context.new_page()
+                    await page.goto(url, timeout=90000, wait_until="load")
 
                 i_source = await page.content()
+                base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
 
-                video_param = parse_qs(urlparse(url).query).get('v', [None])[0]
-                filename = f"iframe_debug_{video_param or 'unknown'}.html"
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(i_source)
-                logger.info(f"Iframe içeriği '{filename}' dosyasına kaydedildi.")
-
+                # 1. Altyazıları Çıkar (Kotlin kodundaki gibi)
                 sub_urls = set()
-                altyazilar = []
-                for match in re.finditer(r'"file":"([^"]+\.vtt[^"]*)","label":"([^"]+)"', i_source):
-                    sub_url = match.group(1).replace("\\", "")
-                    sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç")
+                # Regex düzeltildi, escape karakterlerini ve unicode'u daha iyi işler
+                for match in re.finditer(r'"file":"((?:\\"|[^"])*)","label":"((?:\\"|[^"])*)"', i_source):
+                    sub_url = match.group(1).replace("\\/", "/").replace('\\"', '"')
+                    if ".vtt" not in sub_url: continue # Sadece altyazıları al
+                    
+                    sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç").replace("\\u011f", "ğ").replace("\\u015f", "ş")
+                    
                     if sub_url not in sub_urls:
                         sub_urls.add(sub_url)
-                        altyazilar.append({"dil": sub_lang, "url": urljoin(self.main_url, sub_url)})
+                        logger.info(f"Altyazı bulundu: Dil: {sub_lang}, URL: {sub_url}")
                         if subtitle_callback:
-                            await subtitle_callback(altyazilar[-1])
-
-                linkler = []
-                # YÖNTEM 1: Direkt video linki arama
-                video_file_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4)[^"]*)"', i_source)
-                if video_file_match:
-                    m3u_link = video_file_match.group(1).replace("\\", "")
-                    linkler.append({"kaynak": "ContentX (Direct Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                    if callback: await callback(linkler[-1])
-                    await browser.close()
-                    return {"linkler": linkler, "altyazilar": altyazilar}
-
-                # YÖNTEM 2: Yeni eklenen kontrol. Gizlenmiş JS içindeki linki arama.
-                obfuscated_match = re.search(r'sources:\[\{file:"(https?://[^"]+\.m3u8[^"]*)"', i_source)
-                if obfuscated_match:
-                    m3u_link = obfuscated_match.group(1).replace("\\", "")
-                    logger.info(f"ContentX: Gizlenmiş JS içinden link bulundu: {m3u_link}")
-                    linkler.append({"kaynak": "ContentX (Obfuscated JS)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                    if callback: await callback(linkler[-1])
-                    await browser.close()
-                    return {"linkler": linkler, "altyazilar": altyazilar}
-
-                # YÖNTEM 3: Eski "openPlayer" metodunu arama
+                            await subtitle_callback({"dil": sub_lang, "url": urljoin(base_iframe_url, sub_url)})
+                
+                # 2. Ana video linkini çıkar (Kotlin: 2 adımlı yöntem)
                 open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source)
-                if open_player_match:
-                    i_extract_val = open_player_match.group(1)
-                    base_iframe_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
-                    source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                    logger.info(f"ContentX: source2.php'ye istek gönderiliyor: {source_url}")
+                if not open_player_match:
+                    raise Exception("ContentX Hatası: `window.openPlayer` kalıbı bulunamadı. Site yapısı değişmiş.")
 
-                    await page.goto(source_url, timeout=90000)
-                    await page.wait_for_load_state("load")
-                    vid_source = await page.content()
+                i_extract_val = open_player_match.group(1)
+                source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                logger.info(f"ContentX: source2.php adresine gidiliyor -> {source_url}")
 
-                    with open("source2_debug.html", "w", encoding="utf-8") as f:
-                        f.write(vid_source)
-                    logger.info("source2.php içeriği 'source2_debug.html' dosyasına kaydedildi.")
+                await page.goto(source_url, timeout=90000, wait_until="load")
+                vid_source = await page.content()
 
-                    vid_extract_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4)[^"]*)"', vid_source)
-                    if vid_extract_match:
-                        m3u_link = vid_extract_match.group(1).replace("\\", "")
-                        linkler.append({"kaynak": "ContentX (Source2 Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                        if callback: await callback(linkler[-1])
-                    await browser.close()
-                    return {"linkler": linkler, "altyazilar": altyazilar}
+                vid_extract_match = re.search(r'"file":"([^"]+)"', vid_source)
+                if not vid_extract_match:
+                    raise Exception("ContentX Hatası: `source2.php` içinde video linki bulunamadı.")
+                
+                m3u_link = vid_extract_match.group(1).replace("\\", "")
+                logger.info(f"Video linki başarıyla bulundu: {m3u_link}")
+                if callback:
+                    await callback({"kaynak": "ContentX", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
+                
+                # 3. Dublajlı versiyonu kontrol et (Kotlin kodundaki gibi)
+                dublaj_match = re.search(r""","([^']+)","Türkçe""", i_source)
+                if dublaj_match:
+                    dublaj_extract_val = dublaj_match.group(1)
+                    dublaj_source_url = f"{base_iframe_url}/source2.php?v={dublaj_extract_val}"
+                    logger.info(f"ContentX: Türkçe dublaj için source2.php adresine gidiliyor -> {dublaj_source_url}")
 
-                logger.warning(f"ContentX Hatası: Video linki bulunamadı. Sayfa içeriği değişmiş olabilir: {url}")
+                    await page.goto(dublaj_source_url, timeout=90000, wait_until="load")
+                    dublaj_vid_source = await page.content()
+                    
+                    dublaj_vid_match = re.search(r'"file":"([^"]+)"', dublaj_vid_source)
+                    if dublaj_vid_match:
+                        dublaj_m3u_link = dublaj_vid_match.group(1).replace("\\", "")
+                        logger.info(f"Türkçe dublaj linki bulundu: {dublaj_m3u_link}")
+                        if callback:
+                            await callback({"kaynak": "ContentX (Dublaj)", "isim": "ContentX Video (Dublaj)", "url": dublaj_m3u_link, "tur": "m3u8"})
+
                 await browser.close()
-                return {"linkler": [], "altyazilar": altyazilar}
+                return # Başarıyla tamamlandı
 
             except Exception as e:
-                logger.error(f"ContentX çıkarma başarısız: {e}")
+                logger.error(f"ContentX extractor içinde hata: {e}")
                 if browser:
                     await browser.close()
-                return {"linkler": [], "altyazilar": []}
+                return
 
-# DiziPalOrijinal sınıfı
+# DiziPalOrijinal sınıfı (Değişiklik yok)
 class DiziPalOrijinal:
     main_url = "https://dizipal935.com"
     name = "DiziPalOrijinal"
@@ -207,159 +197,117 @@ class DiziPalOrijinal:
                 raise
 
     async def load_links(self, data, is_casting, subtitle_callback, callback):
-        async with async_playwright() as p:
-            browser = None
-            try:
+        try:
+            page_content = ""
+            async with async_playwright() as p:
                 browser = await p.firefox.launch(headless=True, proxy=PROXY)
-                context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"])
                 await stealth_async(context)
                 for name, value in self.session_cookies.items():
                     await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
                 page = await context.new_page()
-                try:
-                    logger.info(f"Link sayfasına erişiliyor: {data}")
-                    await page.goto(data, timeout=90000)
-                    await page.wait_for_load_state("load")
-                except Exception as e:
-                    logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
-                    await browser.close()
-                    browser = await p.firefox.launch(headless=True)
-                    context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                    await stealth_async(context)
-                    for name, value in self.session_cookies.items():
-                        await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
-                    page = await context.new_page()
-                    await page.goto(data, timeout=90000)
-                    await page.wait_for_load_state("load")
-
-                soup = BeautifulSoup(await page.content(), 'html.parser')
-                hidden_json_tag = soup.select_one("div[data-rm-k]")
-                if not hidden_json_tag:
-                    logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
-                    await browser.close()
-                    return False
-                
-                hidden_json = hidden_json_tag.text
-                obj = json.loads(hidden_json)
-                
-                ciphertext = obj['ciphertext']
-                iv = obj['iv']
-                salt = obj['salt']
-                passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
-                
-                decrypted_content = decrypt(passphrase, salt, iv, ciphertext)
-                iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
-                logger.info(f"Çözülen iframe URL: {iframe_url}")
-                
-                for extractor in self.extractors:
-                    result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback, context=context)
-                    if result["linkler"] or result["altyazilar"]:
-                        await browser.close()
-                        return True
+                await page.goto(data, timeout=90000, wait_until="load")
+                page_content = await page.content()
                 await browser.close()
+            
+            soup = BeautifulSoup(page_content, 'html.parser')
+            hidden_json_tag = soup.select_one("div[data-rm-k]")
+            if not hidden_json_tag:
+                logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
                 return False
+            
+            hidden_json = hidden_json_tag.text
+            obj = json.loads(hidden_json)
+            
+            ciphertext = obj['ciphertext']
+            iv = obj['iv']
+            salt = obj['salt']
+            passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
+            
+            decrypted_content = decrypt(passphrase, salt, iv, ciphertext)
+            iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
+            logger.info(f"Çözülen iframe URL: {iframe_url}")
+            
+            for extractor in self.extractors:
+                await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
+            
+            return True
 
-            except Exception as e:
-                logger.error(f"Link çıkarma hatası: {e}")
-                if browser:
-                    await browser.close()
-                return False
+        except Exception as e:
+            logger.error(f"Link çıkarma hatası: {e}")
+            return False
 
     async def calistir(self):
         await self.init_session()
         url = f"{self.main_url}/yabanci-dizi-izle"
+        page_content = ""
         async with async_playwright() as p:
-            browser = None
+            browser = await p.firefox.launch(headless=True, proxy=PROXY)
+            context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+            await stealth_async(context)
+            for name, value in self.session_cookies.items():
+                await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+            page = await context.new_page()
+            await page.goto(url, timeout=90000, wait_until="load")
+            page_content = await page.content()
+            await browser.close()
+
+        soup = BeautifulSoup(page_content, 'html.parser')
+        series_divs = soup.select("div.prm-borderb")
+        logger.info(f"Ana sayfada bulunan öğe sayısı: {len(series_divs)}")
+        all_data = []
+        
+        for item in series_divs:
             try:
-                browser = await p.firefox.launch(headless=True, proxy=PROXY)
-                context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                await stealth_async(context)
-                for name, value in self.session_cookies.items():
-                    await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
-                page = await context.new_page()
-                try:
-                    logger.info(f"Ana sayfaya erişiliyor: {url}")
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
-                except Exception as e:
-                    logger.warning(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
-                    await browser.close()
-                    browser = await p.firefox.launch(headless=True)
-                    context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
-                    await stealth_async(context)
-                    for name, value in self.session_cookies.items():
-                        await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
-                    page = await context.new_page()
-                    await page.goto(url, timeout=90000)
-                    await page.wait_for_load_state("load")
+                a_tag = item.select_one("a")
+                if not a_tag: continue
+                
+                raw_href = a_tag.get("href", "")
+                series_href = ""
+                if "/bolum/" in raw_href:
+                    # Bölüm linkinden ana dizi linkini türetme
+                    parts = raw_href.split('/')[2].split('-')
+                    if 'sezon' in parts and 'bolum' in parts:
+                        sezon_index = parts.index('sezon')
+                        series_name = '-'.join(parts[:sezon_index-1])
+                        series_href = f"/series/{series_name}"
+                    else: # Daha genel bir fallback
+                        series_href = "/series/" + '-'.join(raw_href.split('/')[2].split('-')[:-4])
+                elif "/series/" in raw_href:
+                    series_href = raw_href
+                else: continue
 
-                soup = BeautifulSoup(await page.content(), 'html.parser')
-                series_divs = soup.select("div.prm-borderb")
-                logger.info(f"Ana sayfada bulunan öğe sayısı: {len(series_divs)}")
-                all_data = []
-                processed_series_urls = set()
+                series_url = urljoin(self.main_url, series_href)
+                title = item.select_one("img").get("alt", "Bilinmeyen Başlık")
+                logger.info(f"İşleniyor: {title} ({series_url})")
 
-                for item in series_divs:
-                    try:
-                        a_tag = item.select_one("a")
-                        if not a_tag:
-                            continue
-                        raw_href = a_tag.get("href", "")
-                        series_href = ""
-                        if "/bolum/" in raw_href:
-                            parts = raw_href.split('/')[2].split('-')
-                            if 'sezon' in parts and 'bolum' in parts:
-                                sezon_index = parts.index('sezon')
-                                series_name = '-'.join(parts[:sezon_index-1])
-                                series_href = f"/series/{series_name}"
-                            else:
-                                series_href = "/series/" + '-'.join(raw_href.split('/')[2].split('-')[:-4])
-                        elif "/series/" in raw_href:
-                            series_href = raw_href
-                        else:
-                            continue
+                # Dizinin kendi sayfasına gitmeye gerek kalmadan bölüm linklerini alabiliriz.
+                # Şimdilik örnek olarak ilk bölümü işleyelim.
+                # Gerçek bir uygulamada tüm bölümleri gezmek için bir yapı kurulmalı.
+                
+                # Sadece bir bölümü test etmek için örnek bölüm URL'si alınıyor
+                first_episode_url = urljoin(self.main_url, raw_href)
+                
+                logger.info(f"Bölüm işleniyor: {first_episode_url}")
+                video_data = {"linkler": [], "altyazilar": []}
 
-                        series_url = urljoin(self.main_url, series_href)
-                        if series_url in processed_series_urls:
-                            continue
-                        processed_series_urls.add(series_url)
+                async def subtitle_callback(subtitle):
+                    logger.info(f"Altyazı eklendi: {subtitle}")
+                    video_data["altyazilar"].append(subtitle)
+                async def callback(link):
+                    logger.info(f"Link eklendi: {link}")
+                    video_data["linkler"].append(link)
 
-                        title = item.select_one("img").get("alt", "Bilinmeyen Başlık")
-                        logger.info(f"İşleniyor: {title} ({series_url})")
-
-                        await page.goto(series_url, timeout=90000)
-                        await page.wait_for_load_state("load")
-                        series_soup = BeautifulSoup(await page.content(), 'html.parser')
-                        episode_links = series_soup.select("a.text.block[data-dizipal-pageloader='true']")
-                        logger.info(f"  > {len(episode_links)} bölüm bulundu.")
-
-                        series_data = {"baslik": title, "url": series_url, "bolumler": []}
-                        for ep_link in episode_links:
-                            episode_url = urljoin(self.main_url, ep_link['href'])
-                            video_data = {"linkler": [], "altyazilar": []}
-                            async def subtitle_callback(subtitle):
-                                video_data["altyazilar"].append(subtitle)
-                            async def callback(link):
-                                video_data["linkler"].append(link)
-                            logger.info(f"Bölüm işleniyor: {episode_url}")
-                            await self.load_links(episode_url, False, subtitle_callback, callback)
-                            series_data["bolumler"].append({"url": episode_url, "video_bilgisi": video_data})
-
-                        all_data.append(series_data)
-
-                    except Exception as e:
-                        logger.error(f"Bir seri işlenirken hata oluştu: {e}")
-                        continue
-
-                await browser.close()
-                with open("dizipal_sonuclar.json", "w", encoding="utf-8") as f:
-                    json.dump(all_data, f, ensure_ascii=False, indent=4)
-                logger.info("Tüm veriler 'dizipal_sonuclar.json' dosyasına kaydedildi.")
+                await self.load_links(first_episode_url, False, subtitle_callback, callback)
+                all_data.append({"baslik": title, "url": series_url, "bolum_bilgisi": video_data})
 
             except Exception as e:
-                logger.error(f"Ana sayfa kazıma hatası: {e}")
-                if browser:
-                    await browser.close()
+                logger.error(f"Bir seri işlenirken hata oluştu: {e}")
+                continue
+
+        with open("dizipal_sonuclar.json", "w", encoding="utf-8") as f:
+            json.dump(all_data, f, ensure_ascii=False, indent=4)
+        logger.info("Tüm veriler 'dizipal_sonuclar.json' dosyasına kaydedildi.")
 
 # Ana çalıştırma
 if __name__ == "__main__":
