@@ -146,7 +146,7 @@ class ContentX(ExtractorApi):
                         else:
                             logger.warning("ContentX: source2.php içinde video linki bulunamadı.")
 
-                        # Türkçe dublaj kontrolü (ContentXExtractor.kt'den)
+                        # Türkçe dublaj kontrolü (ContentXExtractor.kt'den, düzeltilmiş regex)
                         dublaj_match = re.search(r',"([^"]+)","Türkçe"', i_source, re.IGNORECASE)
                         if dublaj_match:
                             dublaj_val = dublaj_match.group(1)
@@ -235,7 +235,7 @@ class ContentX(ExtractorApi):
                                         await callback(linkler[-1])
 
                         # Türkçe dublaj kontrolü
-                        dublaj_match = re.search(r',"([^']+)","Türkçe"', i_source_scraper, re.IGNORECASE)
+                        dublaj_match = re.search(r',"([^"]+)","Türkçe"', i_source_scraper, re.IGNORECASE)
                         if dublaj_match:
                             dublaj_val = dublaj_match.group(1)
                             dublaj_source_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}/source2.php?v={dublaj_val}"
