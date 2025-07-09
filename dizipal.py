@@ -31,17 +31,25 @@ HEADERS = {
 # Şifre çözme fonksiyonu
 def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
     try:
+        logger.info("Şifre çözme işlemi başlatılıyor")
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
+        logger.info("Salt, IV ve ciphertext başarıyla işlendi")
+
+        # PBKDF2 için HMAC-SHA512 kullanarak anahtar türetme
         key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=hashlib.sha512)
+        logger.info("Anahtar başarıyla türetildi")
+
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
         padding_len = plaintext[-1]
         plaintext = plaintext[:-padding_len]
-        return plaintext.decode('utf-8')
+        result = plaintext.decode('utf-8')
+        logger.info("Şifre çözme başarılı")
+        return result
     except Exception as e:
-        logger.error(f"Şifre çözme hatası: {e}")
+        logger.error(f"Şifre çözme hatası: {str(e)}")
         raise
 
 # Base ExtractorApi sınıfı
