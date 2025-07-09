@@ -147,7 +147,7 @@ class ContentX(ExtractorApi):
                             logger.warning("ContentX: source2.php içinde video linki bulunamadı.")
 
                         # Türkçe dublaj kontrolü (ContentXExtractor.kt'den)
-                        dublaj_match = re.search(r',"([^']+)","Türkçe"', i_source, re.IGNORECASE)
+                        dublaj_match = re.search(r',"([^"]+)","Türkçe"', i_source, re.IGNORECASE)
                         if dublaj_match:
                             dublaj_val = dublaj_match.group(1)
                             dublaj_source_url = f"{base_iframe_url}/source2.php?v={dublaj_val}"
