@@ -46,7 +46,7 @@ class ExtractorApi:
 class ContentX(ExtractorApi):
     name = "ContentX"
     main_url = "https://contentx.me"
-    requires_reスティ
+    requires_referer = True
 
     def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         headers = HEADERS.copy()
@@ -112,8 +112,8 @@ class ContentX(ExtractorApi):
                         linkler.append({"kaynak": "ContentX (Source2 Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
                         if callback:
                             callback(linkler[-1])
-                        browser.close()
-                        return {"linkler": linkler, "altyazilar": altyazilar}
+                    browser.close()
+                    return {"linkler": linkler, "altyazilar": altyazilar}
 
                 print(f"ContentX Hatası: Video linki bulunamadı. Sayfa içeriği değişmiş olabilir: {url}")
                 browser.close()
@@ -256,7 +256,13 @@ class DiziPalOrijinal:
 
                         for ep_link in episode_links:
                             episode_url = urljoin(self.main_url, ep_link['href'])
-                            video_data = self.load_links(episode_url, False, lambda subtitle: print(f"Altyazı: {subtitle}"), lambda link: print(f"Video Linki: {link}"))
+                            # load_links burada bool döndürüyor, bu yüzden video_data yerine geçici bir liste tutuyoruz
+                            video_data = {"linkler": [], "altyazilar": []}
+                            def subtitle_callback(subtitle):
+                                video_data["altyazilar"].append(subtitle)
+                            def callback(link):
+                                video_data["linkler"].append(link)
+                            self.load_links(episode_url, False, subtitle_callback, callback)
                             series_data["bolumler"].append({"url": episode_url, "video_bilgisi": video_data})
 
                         all_data.append(series_data)
