@@ -1,9 +1,10 @@
+import asyncio
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
 import re
 import json
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
 import base64
@@ -39,7 +40,7 @@ def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
 
 # Base ExtractorApi sınıfı
 class ExtractorApi:
-    def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
+    async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         raise NotImplementedError
 
 # ContentX Extractor sınıfı
@@ -48,29 +49,29 @@ class ContentX(ExtractorApi):
     main_url = "https://contentx.me"
     requires_referer = True
 
-    def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
+    async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         headers = HEADERS.copy()
         headers["Referer"] = referer if referer else url
-        try:
-            with sync_playwright() as p:
+        async with async_playwright() as p:
+            try:
                 # Proxy ile deneme
-                browser = p.firefox.launch(headless=True, proxy=PROXY)
-                context = browser.new_context(user_agent=HEADERS["User-Agent"])
-                page = context.new_page()
+                browser = await p.firefox.launch(headless=True, proxy=PROXY)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+                page = await context.new_page()
                 try:
-                    page.goto(url, timeout=60000)  # Zaman aşımını 60 saniyeye çıkardık
-                    page.wait_for_load_state("load")  # networkidle yerine load kullanıyoruz
+                    await page.goto(url, timeout=60000)
+                    await page.wait_for_load_state("load")
                 except Exception as e:
                     print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
-                    browser.close()
+                    await browser.close()
                     # Proxysiz deneme
-                    browser = p.firefox.launch(headless=True)
-                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
-                    page = context.new_page()
-                    page.goto(url, timeout=60000)
-                    page.wait_for_load_state("load")
+                    browser = await p.firefox.launch(headless=True)
+                    context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+                    page = await context.new_page()
+                    await page.goto(url, timeout=60000)
+                    await page.wait_for_load_state("load")
 
-                i_source = page.content()
+                i_source = await page.content()
 
                 # Hata ayıklama için iframe içeriğini kaydet
                 video_param = parse_qs(urlparse(url).query).get('v', [None])[0]
@@ -89,7 +90,7 @@ class ContentX(ExtractorApi):
                         sub_urls.add(sub_url)
                         altyazilar.append({"dil": sub_lang, "url": urljoin(self.main_url, sub_url)})
                         if subtitle_callback:
-                            subtitle_callback(altyazilar[-1])
+                            await subtitle_callback(altyazilar[-1])
 
                 # Video linkini çıkarma
                 linkler = []
@@ -98,8 +99,8 @@ class ContentX(ExtractorApi):
                     m3u_link = video_file_match.group(1).replace("\\", "")
                     linkler.append({"kaynak": "ContentX (Direct Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
                     if callback:
-                        callback(linkler[-1])
-                    browser.close()
+                        await callback(linkler[-1])
+                    await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
                 open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source)
@@ -109,9 +110,9 @@ class ContentX(ExtractorApi):
                     source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
                     print(f"ContentX: source2.php'ye istek gönderiliyor: {source_url}")
 
-                    page.goto(source_url, timeout=60000)
-                    page.wait_for_load_state("load")
-                    vid_source = page.content()
+                    await page.goto(source_url, timeout=60000)
+                    await page.wait_for_load_state("load")
+                    vid_source = await page.content()
 
                     # source2.php içeriğini kaydet
                     with open("source2_debug.html", "w", encoding="utf-8") as f:
@@ -123,17 +124,17 @@ class ContentX(ExtractorApi):
                         m3u_link = vid_extract_match.group(1).replace("\\", "")
                         linkler.append({"kaynak": "ContentX (Source2 Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
                         if callback:
-                            callback(linkler[-1])
-                    browser.close()
+                            await callback(linkler[-1])
+                    await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
                 print(f"ContentX Hatası: Video linki bulunamadı. Sayfa içeriği değişmiş olabilir: {url}")
-                browser.close()
+                await browser.close()
                 return {"linkler": [], "altyazilar": altyazilar}
 
-        except Exception as e:
-            print(f"ContentX çıkarma başarısız: {e}")
-            return {"linkler": [], "altyazilar": []}
+            except Exception as e:
+                print(f"ContentX çıkarma başarısız: {e}")
+                return {"linkler": [], "altyazilar": []}
 
 # DiziPalOrijinal sınıfı
 class DiziPalOrijinal:
@@ -149,63 +150,63 @@ class DiziPalOrijinal:
         self.extractors = [ContentX()]
         HEADERS['Referer'] = self.main_url + "/"
 
-    def init_session(self):
+    async def init_session(self):
         if self.session_cookies and self.c_key and self.c_value:
             return
         print("Oturum başlatılıyor: çerezler, cKey ve cValue alınıyor")
-        try:
-            with sync_playwright() as p:
-                browser = p.firefox.launch(headless=True, proxy=PROXY)
-                context = browser.new_context(user_agent=HEADERS["User-Agent"])
-                page = context.new_page()
+        async with async_playwright() as p:
+            try:
+                browser = await p.firefox.launch(headless=True, proxy=PROXY)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+                page = await context.new_page()
                 try:
-                    page.goto(self.main_url, timeout=60000)  # Zaman aşımını artırdık
-                    page.wait_for_load_state("load")
+                    await page.goto(self.main_url, timeout=60000)
+                    await page.wait_for_load_state("load")
                 except Exception as e:
                     print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
-                    browser.close()
-                    browser = p.firefox.launch(headless=True)
-                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
-                    page = context.new_page()
-                    page.goto(self.main_url, timeout=60000)
-                    page.wait_for_load_state("load")
+                    await browser.close()
+                    browser = await p.firefox.launch(headless=True)
+                    context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+                    page = await context.new_page()
+                    await page.goto(self.main_url, timeout=60000)
+                    await page.wait_for_load_state("load")
 
-                self.session_cookies = {cookie["name"]: cookie["value"] for cookie in page.context.cookies()}
-                soup = BeautifulSoup(page.content(), 'html.parser')
+                self.session_cookies = {cookie["name"]: cookie["value"] for cookie in await context.cookies()}
+                soup = BeautifulSoup(await page.content(), 'html.parser')
                 self.c_key = soup.select_one("input[name=cKey]")['value'] if soup.select_one("input[name=cKey]") else None
                 self.c_value = soup.select_one("input[name=cValue]")['value'] if soup.select_one("input[name=cValue]") else None
                 print(f"cKey: {self.c_key}, cValue: {self.c_value}")
                 if not self.c_key or not self.c_value:
                     raise ValueError("cKey veya cValue alınamadı")
-                browser.close()
-        except Exception as e:
-            print(f"Oturum başlatma başarısız: {e}")
-            raise
+                await browser.close()
+            except Exception as e:
+                print(f"Oturum başlatma başarısız: {e}")
+                raise
 
-    def load_links(self, data, is_casting, subtitle_callback, callback):
-        self.init_session()
-        try:
-            with sync_playwright() as p:
-                browser = p.firefox.launch(headless=True, proxy=PROXY)
-                context = browser.new_context(user_agent=HEADERS["User-Agent"])
+    async def load_links(self, data, is_casting, subtitle_callback, callback):
+        await self.init_session()
+        async with async_playwright() as p:
+            try:
+                browser = await p.firefox.launch(headless=True, proxy=PROXY)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"])
                 for name, value in self.session_cookies.items():
-                    context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
-                page = context.new_page()
+                    await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                page = await context.new_page()
                 try:
-                    page.goto(data, timeout=60000)
-                    page.wait_for_load_state("load")
+                    await page.goto(data, timeout=60000)
+                    await page.wait_for_load_state("load")
                 except Exception as e:
                     print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
-                    browser.close()
-                    browser = p.firefox.launch(headless=True)
-                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
+                    await browser.close()
+                    browser = await p.firefox.launch(headless=True)
+                    context = await browser.new_context(user_agent=HEADERS["User-Agent"])
                     for name, value in self.session_cookies.items():
-                        context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
-                    page = context.new_page()
-                    page.goto(data, timeout=60000)
-                    page.wait_for_load_state("load")
+                        await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                    page = await context.new_page()
+                    await page.goto(data, timeout=60000)
+                    await page.wait_for_load_state("load")
 
-                soup = BeautifulSoup(page.content(), 'html.parser')
+                soup = BeautifulSoup(await page.content(), 'html.parser')
                 hidden_json = soup.select_one("div[data-rm-k]").text
                 obj = json.loads(hidden_json)
 
@@ -222,43 +223,43 @@ class DiziPalOrijinal:
 
                 # Extractor ile linkleri çıkarma
                 for extractor in self.extractors:
-                    result = extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
+                    result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
                     if result["linkler"] or result["altyazilar"]:
-                        browser.close()
+                        await browser.close()
                         return True
-                browser.close()
+                await browser.close()
                 return False
 
-        except Exception as e:
-            print(f"Link çıkarma hatası: {e}")
-            return False
+            except Exception as e:
+                print(f"Link çıkarma hatası: {e}")
+                return False
 
-    def calistir(self):
+    async def calistir(self):
         """Ana sayfadan dizileri kazı ve JSON olarak kaydet."""
-        self.init_session()
+        await self.init_session()
         url = f"{self.main_url}/yabanci-dizi-izle"
-        try:
-            with sync_playwright() as p:
-                browser = p.firefox.launch(headless=True, proxy=PROXY)
-                context = browser.new_context(user_agent=HEADERS["User-Agent"])
+        async with async_playwright() as p:
+            try:
+                browser = await p.firefox.launch(headless=True, proxy=PROXY)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"])
                 for name, value in self.session_cookies.items():
-                    context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
-                page = context.new_page()
+                    await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                page = await context.new_page()
                 try:
-                    page.goto(url, timeout=60000)
-                    page.wait_for_load_state("load")
+                    await page.goto(url, timeout=60000)
+                    await page.wait_for_load_state("load")
                 except Exception as e:
                     print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
-                    browser.close()
-                    browser = p.firefox.launch(headless=True)
-                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
+                    await browser.close()
+                    browser = await p.firefox.launch(headless=True)
+                    context = await browser.new_context(user_agent=HEADERS["User-Agent"])
                     for name, value in self.session_cookies.items():
-                        context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
-                    page = context.new_page()
-                    page.goto(url, timeout=60000)
-                    page.wait_for_load_state("load")
+                        await context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                    page = await context.new_page()
+                    await page.goto(url, timeout=60000)
+                    await page.wait_for_load_state("load")
 
-                soup = BeautifulSoup(page.content(), 'html.parser')
+                soup = BeautifulSoup(await page.content(), 'html.parser')
                 series_divs = soup.select("div.prm-borderb")
                 print(f"Ana sayfada bulunan öğe sayısı: {len(series_divs)}")
                 all_data = []
@@ -294,20 +295,20 @@ class DiziPalOrijinal:
                         series_data = {"baslik": title, "url": series_url, "bolumler": []}
                         print(f"\nİşleniyor: {title} ({series_url})")
 
-                        page.goto(series_url, timeout=60000)
-                        page.wait_for_load_state("load")
-                        series_soup = BeautifulSoup(page.content(), 'html.parser')
+                        await page.goto(series_url, timeout=60000)
+                        await page.wait_for_load_state("load")
+                        series_soup = BeautifulSoup(await page.content(), 'html.parser')
                         episode_links = series_soup.select("a.text.block[data-dizipal-pageloader='true']")
                         print(f"  > {len(episode_links)} bölüm bulundu.")
 
                         for ep_link in episode_links:
                             episode_url = urljoin(self.main_url, ep_link['href'])
                             video_data = {"linkler": [], "altyazilar": []}
-                            def subtitle_callback(subtitle):
+                            async def subtitle_callback(subtitle):
                                 video_data["altyazilar"].append(subtitle)
-                            def callback(link):
+                            async def callback(link):
                                 video_data["linkler"].append(link)
-                            self.load_links(episode_url, False, subtitle_callback, callback)
+                            await self.load_links(episode_url, False, subtitle_callback, callback)
                             series_data["bolumler"].append({"url": episode_url, "video_bilgisi": video_data})
 
                         all_data.append(series_data)
@@ -316,15 +317,15 @@ class DiziPalOrijinal:
                         print(f"Bir seri işlenirken hata oluştu: {e}")
                         continue
 
-                browser.close()
+                await browser.close()
                 with open("dizipal_sonuclar.json", "w", encoding="utf-8") as f:
                     json.dump(all_data, f, ensure_ascii=False, indent=4)
                 print("\nTüm veriler 'dizipal_sonuclar.json' dosyasına kaydedildi.")
 
-        except Exception as e:
-            print(f"Ana sayfa kazıma hatası: {e}")
+            except Exception as e:
+                print(f"Ana sayfa kazıma hatası: {e}")
 
-# Örnek kullanım
+# Ana çalıştırma
 if __name__ == "__main__":
     dizipal = DiziPalOrijinal()
-    dizipal.calistir()
+    asyncio.run(dizipal.calistir())
