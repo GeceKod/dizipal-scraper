@@ -8,6 +8,7 @@ from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Hash import SHA512  # Gerekli modül içe aktarıldı
 import base64
 import hmac
 import hashlib
@@ -28,28 +29,22 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
 }
 
-# Şifre çözme fonksiyonu
+# Şifre çözme fonksiyonu (DÜZELTİLDİ)
 def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
     try:
-        logger.info("Şifre çözme işlemi başlatılıyor")
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
-        logger.info("Salt, IV ve ciphertext başarıyla işlendi")
-
-        # PBKDF2 için HMAC-SHA512 kullanarak anahtar türetme
-        key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=hashlib.sha512)
-        logger.info("Anahtar başarıyla türetildi")
-
+        # Hata veren hmac_hash_module parametresi SHA512 modülü ile değiştirildi
+        key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
+        # PKCS7 padding'i manuel olarak kaldırma
         padding_len = plaintext[-1]
         plaintext = plaintext[:-padding_len]
-        result = plaintext.decode('utf-8')
-        logger.info("Şifre çözme başarılı")
-        return result
+        return plaintext.decode('utf-8')
     except Exception as e:
-        logger.error(f"Şifre çözme hatası: {str(e)}")
+        logger.error(f"Şifre çözme hatası: {e}")
         raise
 
 # Base ExtractorApi sınıfı
@@ -208,7 +203,8 @@ class DiziPalOrijinal:
                 raise
 
     async def load_links(self, data, is_casting, subtitle_callback, callback):
-        await self.init_session()
+        # Gereksiz tekrarı önlemek için init_session çağrısı kaldırıldı.
+        # Bu fonksiyon artık oturumun `calistir` metodu tarafından başlatıldığını varsayar.
         async with async_playwright() as p:
             browser = None
             try:
@@ -266,7 +262,7 @@ class DiziPalOrijinal:
 
     async def calistir(self):
         """Ana sayfadan dizileri kazı ve JSON olarak kaydet."""
-        await self.init_session()
+        await self.init_session() # Oturum burada, döngüden önce bir kez başlatılır
         url = f"{self.main_url}/yabanci-dizi-izle"
         async with async_playwright() as p:
             browser = None
