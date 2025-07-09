@@ -53,11 +53,23 @@ class ContentX(ExtractorApi):
         headers["Referer"] = referer if referer else url
         try:
             with sync_playwright() as p:
+                # Proxy ile deneme
                 browser = p.firefox.launch(headless=True, proxy=PROXY)
                 context = browser.new_context(user_agent=HEADERS["User-Agent"])
                 page = context.new_page()
-                page.goto(url)
-                page.wait_for_load_state("networkidle")
+                try:
+                    page.goto(url, timeout=60000)  # Zaman aşımını 60 saniyeye çıkardık
+                    page.wait_for_load_state("load")  # networkidle yerine load kullanıyoruz
+                except Exception as e:
+                    print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
+                    browser.close()
+                    # Proxysiz deneme
+                    browser = p.firefox.launch(headless=True)
+                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
+                    page = context.new_page()
+                    page.goto(url, timeout=60000)
+                    page.wait_for_load_state("load")
+
                 i_source = page.content()
 
                 # Hata ayıklama için iframe içeriğini kaydet
@@ -97,8 +109,8 @@ class ContentX(ExtractorApi):
                     source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
                     print(f"ContentX: source2.php'ye istek gönderiliyor: {source_url}")
 
-                    page.goto(source_url)
-                    page.wait_for_load_state("networkidle")
+                    page.goto(source_url, timeout=60000)
+                    page.wait_for_load_state("load")
                     vid_source = page.content()
 
                     # source2.php içeriğini kaydet
@@ -146,8 +158,18 @@ class DiziPalOrijinal:
                 browser = p.firefox.launch(headless=True, proxy=PROXY)
                 context = browser.new_context(user_agent=HEADERS["User-Agent"])
                 page = context.new_page()
-                page.goto(self.main_url)
-                page.wait_for_load_state("networkidle")
+                try:
+                    page.goto(self.main_url, timeout=60000)  # Zaman aşımını artırdık
+                    page.wait_for_load_state("load")
+                except Exception as e:
+                    print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
+                    browser.close()
+                    browser = p.firefox.launch(headless=True)
+                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
+                    page = context.new_page()
+                    page.goto(self.main_url, timeout=60000)
+                    page.wait_for_load_state("load")
+
                 self.session_cookies = {cookie["name"]: cookie["value"] for cookie in page.context.cookies()}
                 soup = BeautifulSoup(page.content(), 'html.parser')
                 self.c_key = soup.select_one("input[name=cKey]")['value'] if soup.select_one("input[name=cKey]") else None
@@ -169,8 +191,20 @@ class DiziPalOrijinal:
                 for name, value in self.session_cookies.items():
                     context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
                 page = context.new_page()
-                page.goto(data)
-                page.wait_for_load_state("networkidle")
+                try:
+                    page.goto(data, timeout=60000)
+                    page.wait_for_load_state("load")
+                except Exception as e:
+                    print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
+                    browser.close()
+                    browser = p.firefox.launch(headless=True)
+                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
+                    for name, value in self.session_cookies.items():
+                        context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                    page = context.new_page()
+                    page.goto(data, timeout=60000)
+                    page.wait_for_load_state("load")
+
                 soup = BeautifulSoup(page.content(), 'html.parser')
                 hidden_json = soup.select_one("div[data-rm-k]").text
                 obj = json.loads(hidden_json)
@@ -210,8 +244,20 @@ class DiziPalOrijinal:
                 for name, value in self.session_cookies.items():
                     context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
                 page = context.new_page()
-                page.goto(url)
-                page.wait_for_load_state("networkidle")
+                try:
+                    page.goto(url, timeout=60000)
+                    page.wait_for_load_state("load")
+                except Exception as e:
+                    print(f"Proxy ile erişim başarısız, proxysiz deneniyor: {e}")
+                    browser.close()
+                    browser = p.firefox.launch(headless=True)
+                    context = browser.new_context(user_agent=HEADERS["User-Agent"])
+                    for name, value in self.session_cookies.items():
+                        context.add_cookies([{"name": name, "value": value, "url": self.main_url}])
+                    page = context.new_page()
+                    page.goto(url, timeout=60000)
+                    page.wait_for_load_state("load")
+
                 soup = BeautifulSoup(page.content(), 'html.parser')
                 series_divs = soup.select("div.prm-borderb")
                 print(f"Ana sayfada bulunan öğe sayısı: {len(series_divs)}")
@@ -248,15 +294,14 @@ class DiziPalOrijinal:
                         series_data = {"baslik": title, "url": series_url, "bolumler": []}
                         print(f"\nİşleniyor: {title} ({series_url})")
 
-                        page.goto(series_url)
-                        page.wait_for_load_state("networkidle")
+                        page.goto(series_url, timeout=60000)
+                        page.wait_for_load_state("load")
                         series_soup = BeautifulSoup(page.content(), 'html.parser')
                         episode_links = series_soup.select("a.text.block[data-dizipal-pageloader='true']")
                         print(f"  > {len(episode_links)} bölüm bulundu.")
 
                         for ep_link in episode_links:
                             episode_url = urljoin(self.main_url, ep_link['href'])
-                            # load_links burada bool döndürüyor, bu yüzden video_data yerine geçici bir liste tutuyoruz
                             video_data = {"linkler": [], "altyazilar": []}
                             def subtitle_callback(subtitle):
                                 video_data["altyazilar"].append(subtitle)
