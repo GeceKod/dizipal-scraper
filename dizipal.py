@@ -91,9 +91,14 @@ class ContentX(ExtractorApi):
 
                 sub_urls = set()
                 altyazilar = []
-                for match in re.finditer(r'"file":"([^"]+\.vtt[^"]*)","label":"([^"]+)"', i_source):
-                    sub_url = match.group(1).replace("\\", "")
-                    sub_lang = match.group(2).replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç")
+                # Kotlin dosyasındaki altyazı regex'ine benzer şekilde güncellendi
+                for match in re.finditer(r'"file":"((?:\\\\"|[^"])+)","label":"((?:\\\\"|[^"])+)"', i_source):
+                    sub_url_raw = match.group(1)
+                    sub_lang_raw = match.group(2)
+
+                    sub_url = sub_url_raw.replace("\\/", "/").replace("\\u0026", "&").replace("\\", "")
+                    sub_lang = sub_lang_raw.replace("\\u0131", "ı").replace("\\u0130", "İ").replace("\\u00fc", "ü").replace("\\u00e7", "ç").replace("\\u011f", "ğ").replace("\\u015f", "ş")
+
                     if sub_url not in sub_urls:
                         sub_urls.add(sub_url)
                         altyazilar.append({"dil": sub_lang, "url": urljoin(self.main_url, sub_url)})
@@ -101,26 +106,8 @@ class ContentX(ExtractorApi):
                             await subtitle_callback(altyazilar[-1])
 
                 linkler = []
-                # YÖNTEM 1: Direkt video linki arama
-                video_file_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4)[^"]*)"', i_source)
-                if video_file_match:
-                    m3u_link = video_file_match.group(1).replace("\\", "")
-                    linkler.append({"kaynak": "ContentX (Direct Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                    if callback: await callback(linkler[-1])
-                    await browser.close()
-                    return {"linkler": linkler, "altyazilar": altyazilar}
 
-                # YÖNTEM 2: Yeni eklenen kontrol. Gizlenmiş JS içindeki linki arama.
-                obfuscated_match = re.search(r'sources:\[\{file:"(https?://[^"]+\.m3u8[^"]*)"', i_source)
-                if obfuscated_match:
-                    m3u_link = obfuscated_match.group(1).replace("\\", "")
-                    logger.info(f"ContentX: Gizlenmiş JS içinden link bulundu: {m3u_link}")
-                    linkler.append({"kaynak": "ContentX (Obfuscated JS)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                    if callback: await callback(linkler[-1])
-                    await browser.close()
-                    return {"linkler": linkler, "altyazilar": altyazilar}
-
-                # YÖNTEM 3: Eski "openPlayer" metodunu arama
+                # Kotlin dosyasındaki gibi window.openPlayer metodunu arama ve source2.php'ye istek atma
                 open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source)
                 if open_player_match:
                     i_extract_val = open_player_match.group(1)
