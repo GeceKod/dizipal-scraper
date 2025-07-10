@@ -92,7 +92,7 @@ class ContentX(ExtractorApi):
                 sub_urls = set()
                 altyazilar = []
                 # Kotlin dosyasındaki altyazı regex'ine benzer şekilde güncellendi
-                for match in re.finditer(r'"file":"((?:\\\\"|[^"])+)","label":"((?:\\\\"|[^"])+)"', i_source):
+                for match in re.finditer(r'"file":"((?:\\\\\"|[^"])+)","label":"((?:\\\\\"|[^"])+)"', i_source):
                     sub_url_raw = match.group(1)
                     sub_lang_raw = match.group(2)
 
@@ -123,9 +123,11 @@ class ContentX(ExtractorApi):
                         f.write(vid_source)
                     logger.info("source2.php içeriği 'source2_debug.html' dosyasına kaydedildi.")
 
-                    vid_extract_match = re.search(r'"file":"((?:(?!\\.vtt)[^"])+\\.(?:m3u8|mp4)[^"]*)"', vid_source)
+                    # GÜNCELLENMİŞ REGEX VE TEMİZLEME
+                    vid_extract_match = re.search(r'"file":"([^"]+)"', vid_source) # Daha genel regex
                     if vid_extract_match:
-                        m3u_link = vid_extract_match.group(1).replace("\\", "")
+                        m3u_link = vid_extract_match.group(1)
+                        m3u_link = m3u_link.replace("\\", "") # Kotlin'deki gibi ters slashları temizle
                         linkler.append({"kaynak": "ContentX (Source2 Video)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
                         if callback: await callback(linkler[-1])
                     await browser.close()
