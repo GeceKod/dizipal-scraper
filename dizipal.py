@@ -58,9 +58,12 @@ class ExtractorApi:
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         raise NotImplementedError
 
-# ####################################################################
-# ## GÜNCELLENMİŞ CONTENTX EXTRACTOR SINIFI
-# ####################################################################
+---
+
+### ContentX Extractor Sınıfı (Güncellenmiş)
+
+---
+
 class ContentX(ExtractorApi):
     name = "ContentX"
     main_url = "https://contentx.me"
@@ -84,7 +87,8 @@ class ContentX(ExtractorApi):
                 page = await page_context.new_page()
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url} (Referer: {referer})")
-                await page.goto(url, timeout=90000, wait_until="domcontentloaded", referer=referer) # Referer burada kullanılıyor
+                # wait_until parametresi 'networkidle' olarak güncellendi
+                await page.goto(url, timeout=90000, wait_until="networkidle", referer=referer) 
                 i_source = await page.content()
 
                 linkler = []
@@ -140,7 +144,12 @@ class ContentX(ExtractorApi):
                     await browser.close()
                 return {"linkler": [], "altyazilar": []}
 
-# DiziPalOrijinal sınıfı
+---
+
+### DiziPalOrijinal Sınıfı
+
+---
+
 class DiziPalOrijinal:
     main_url = "https://dizipal935.com"
     name = "DiziPalOrijinal"
@@ -226,12 +235,9 @@ class DiziPalOrijinal:
                 logger.info(f"Çözülen iframe URL: {iframe_url}")
 
                 # İframe işleme işlemini extractor'e devret
-                # Not: Playwright context'i extractor'a geçmek, tarayıcıyı yeniden başlatmayı önler.
                 for extractor in self.extractors:
-                    # Referer olarak Dizipal ana sayfasını gönderiyoruz
                     result = await extractor.get_url(iframe_url, referer=self.dizipal_referer, subtitle_callback=subtitle_callback, callback=callback, context=context)
                     if result and (result.get("linkler") or result.get("altyazilar")):
-                        # Başarılı olursa döngüden çık
                         await browser.close()
                         return True
                 
