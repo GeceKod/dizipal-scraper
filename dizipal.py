@@ -64,7 +64,7 @@ class ContentX(ExtractorApi):
             try:
                 logger.info(f"Iframe URL'sine erişiliyor: {url}")
                 # Proxy ile deneme
-                browser = await p.firefox.launch(headless=False, proxy=PROXY)
+                browser = await p.firefox.launch(headless=True, proxy=PROXY)
                 context = context or await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
                 await stealth_async(context)
                 page = await context.new_page()
