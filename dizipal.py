@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
 import re
 import json
+import random
+import time # sleep için kullanılacak
 from playwright.async_api import async_playwright
 from playwright_stealth import stealth_async
 from Crypto.Cipher import AES
@@ -11,6 +13,7 @@ from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Hash import SHA512
 import base64
 import logging
+
 try:
     import cloudscraper
 except ImportError:
@@ -20,9 +23,13 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Proxy ayarları (İsteğe bağlı, kullanmıyorsanız None yapabilirsiniz)
+# Proxy ayarları (Bulduğunuz yeni ve daha gelişmiş proxy'nizi buraya girin)
+# Örnek: "http://kullanici:sifre@proxy.adres:port" veya "socks5://proxy.adres:port"
 PROXY = {
-    "server": "socks5://45.89.28.226:12915",
+    "server": "socks5://45.89.28.226:12915", # Burayı yeni proxy'nizle güncelleyin
+    # Eğer proxy'niz kimlik doğrulama gerektiriyorsa 'username' ve 'password' ekleyin
+    # "username": "your_proxy_username",
+    # "password": "your_proxy_password",
 }
 # PROXY = None # Proxy kullanmıyorsanız bu satırı aktif edin
 
@@ -30,6 +37,8 @@ PROXY = {
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "Accept-Language": "en-US,en;q=0.5", # Gerçekçi bir dil tercihi
+    "Connection": "keep-alive",
 }
 
 # Şifre çözme fonksiyonu
@@ -71,17 +80,50 @@ class ContentX(ExtractorApi):
         async with async_playwright() as p:
             browser = None
             try:
-                browser_options = {'headless': True}
+                # Headless modunu True veya False olarak test edebilirsiniz
+                browser_options = {'headless': True} 
                 if PROXY:
                     browser_options['proxy'] = PROXY
                     
                 browser = await p.firefox.launch(**browser_options)
+                # Yeni bir tarayıcı bağlamı oluşturmak, çerezleri ve yerel depolamayı izole eder
+                # user_agent de burada ayarlanıyor
                 page_context = context or await browser.new_context(user_agent=HEADERS["User-Agent"])
+                
+                # Playwright Stealth ile ek gizlenme
                 await stealth_async(page_context)
+
+                # Ek WebGL parmak izi gizleme (Playwright Stealth'in bir parçası olabilir ancak manuel kontrol faydalı)
+                await page_context.add_init_script("""
+                    Object.defineProperty(WebGLRenderingContext.prototype, 'getParameter', {
+                        value: function(parameter) {
+                            // UNMASKED_VENDOR_WEBGL
+                            if (parameter === 37445) {
+                                return 'Google Inc.';
+                            }
+                            // UNMASKED_RENDERER_WEBGL
+                            if (parameter === 37446) {
+                                return 'ANGLE (Google, Vulkan)'; 
+                            }
+                            return this.originalGetParameter(parameter);
+                        }
+                    });
+                    WebGLRenderingContext.prototype.originalGetParameter = WebGLRenderingContext.prototype.getParameter;
+                """)
+                
                 page = await page_context.new_page()
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url} (Referer: {referer})")
+                
+                # İnsanvari bekleme süresi
+                await asyncio.sleep(random.uniform(2, 5)) 
+                
+                # 'networkidle' daha kapsamlı bir bekleme stratejisi
                 await page.goto(url, timeout=90000, wait_until="networkidle", referer=referer) 
+                
+                # Sayfanın tamamen yüklendiğinden ve JavaScript'lerin çalıştığından emin olmak için ek gecikme
+                await asyncio.sleep(random.uniform(3, 7)) 
+
                 i_source = await page.content()
 
                 linkler = []
@@ -110,6 +152,9 @@ class ContentX(ExtractorApi):
                     # 3. source2.php adresine yeni bir istek gönder
                     source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
                     logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url} (Referer: {url})")
+
+                    # İnsanvari bekleme süresi
+                    await asyncio.sleep(random.uniform(2, 4))
 
                     await page.goto(source_url, timeout=90000, wait_until="domcontentloaded", referer=url)
                     vid_source = await page.content()
@@ -163,11 +208,41 @@ class DiziPalOrijinal:
                     browser_options['proxy'] = PROXY
                     
                 browser = await p.firefox.launch(**browser_options)
-                context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"]) # context içinde user_agent ayarı
                 await stealth_async(context)
+                
+                # Klavye ve fare davranışını taklit etmek için ek başlangıç scripti
+                await context.add_init_script("""
+                    // Rastgele klavye gecikmeleri
+                    const originalType = HTMLInputElement.prototype.type;
+                    HTMLInputElement.prototype.type = async function(...args) {
+                        const delay = Math.random() * 100 + 50; // 50-150ms arası
+                        await new Promise(r => setTimeout(r, delay));
+                        return originalType.apply(this, args);
+                    };
+
+                    // Rastgele fare hareketleri ve tıklama gecikmeleri
+                    const originalClick = HTMLElement.prototype.click;
+                    HTMLElement.prototype.click = async function(...args) {
+                        const delay = Math.random() * 200 + 100; // 100-300ms arası
+                        await new Promise(r => setTimeout(r, delay));
+                        return originalClick.apply(this, args);
+                    };
+                """)
+
                 page = await context.new_page()
                 
+                logger.info(f"Dizipal ana sayfasına gidiliyor: {self.main_url}")
                 await page.goto(self.main_url, timeout=90000, wait_until="load")
+                
+                # Cloudflare'ı aşmak için ek gecikme ve rastgele bir kaydırma yapma
+                await asyncio.sleep(random.uniform(5, 10))
+                # Sayfayı rastgele kaydırma
+                await page.evaluate('window.scrollBy(0, document.body.scrollHeight / 2)')
+                await asyncio.sleep(random.uniform(1, 3))
+                await page.evaluate('window.scrollBy(0, -document.body.scrollHeight / 4)')
+                await asyncio.sleep(random.uniform(1, 3))
+
 
                 self.session_cookies = {cookie["name"]: cookie["value"] for cookie in await context.cookies()}
                 soup = BeautifulSoup(await page.content(), 'html.parser')
@@ -191,16 +266,50 @@ class DiziPalOrijinal:
                 browser_options = {'headless': True}
                 if PROXY:
                     browser_options['proxy'] = PROXY
+                
                 browser = await p.firefox.launch(**browser_options)
-                context = await browser.new_context(user_agent=HEADERS["User-Agent"], bypass_csp=True)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"]) # context içinde user_agent ayarı
                 await stealth_async(context)
+
+                # init_session'dan kopyalanan init_scripts'leri de buraya ekliyoruz
+                await context.add_init_script("""
+                    const originalType = HTMLInputElement.prototype.type;
+                    HTMLInputElement.prototype.type = async function(...args) {
+                        const delay = Math.random() * 100 + 50; 
+                        await new Promise(r => setTimeout(r, delay));
+                        return originalType.apply(this, args);
+                    };
+                    const originalClick = HTMLElement.prototype.click;
+                    HTMLElement.prototype.click = async function(...args) {
+                        const delay = Math.random() * 200 + 100; 
+                        await new Promise(r => setTimeout(r, delay));
+                        return originalClick.apply(this, args);
+                    };
+                    Object.defineProperty(WebGLRenderingContext.prototype, 'getParameter', {
+                        value: function(parameter) {
+                            if (parameter === 37445) { return 'Google Inc.'; }
+                            if (parameter === 37446) { return 'ANGLE (Google, Vulkan)'; }
+                            return this.originalGetParameter(parameter);
+                        }
+                    });
+                    WebGLRenderingContext.prototype.originalGetParameter = WebGLRenderingContext.prototype.getParameter;
+                """)
+
                 if self.session_cookies:
                     await context.add_cookies([{"name": name, "value": value, "url": self.main_url} for name, value in self.session_cookies.items()])
                 
                 page = await context.new_page()
                 
                 logger.info(f"Link sayfasına erişiliyor: {data}")
+                await asyncio.sleep(random.uniform(2, 5)) # İnsanvari gecikme
                 await page.goto(data, timeout=90000, wait_until="load")
+
+                # Sayfayı kaydırma ve biraz bekleme
+                await asyncio.sleep(random.uniform(3, 7))
+                await page.evaluate('window.scrollBy(0, document.body.scrollHeight / 3)')
+                await asyncio.sleep(random.uniform(1, 3))
+                await page.evaluate('window.scrollBy(0, -document.body.scrollHeight / 6)')
+                await asyncio.sleep(random.uniform(1, 3))
 
                 soup = BeautifulSoup(await page.content(), 'html.parser')
                 hidden_json_tag = soup.select_one("div[data-rm-k]")
