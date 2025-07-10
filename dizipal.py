@@ -58,12 +58,6 @@ class ExtractorApi:
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None):
         raise NotImplementedError
 
----
-
-### ContentX Extractor Sınıfı (Güncellenmiş)
-
----
-
 class ContentX(ExtractorApi):
     name = "ContentX"
     main_url = "https://contentx.me"
@@ -87,7 +81,6 @@ class ContentX(ExtractorApi):
                 page = await page_context.new_page()
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url} (Referer: {referer})")
-                # wait_until parametresi 'networkidle' olarak güncellendi
                 await page.goto(url, timeout=90000, wait_until="networkidle", referer=referer) 
                 i_source = await page.content()
 
@@ -144,12 +137,6 @@ class ContentX(ExtractorApi):
                     await browser.close()
                 return {"linkler": [], "altyazilar": []}
 
----
-
-### DiziPalOrijinal Sınıfı
-
----
-
 class DiziPalOrijinal:
     main_url = "https://dizipal935.com"
     name = "DiziPalOrijinal"
@@ -161,7 +148,7 @@ class DiziPalOrijinal:
         self.c_key = None
         self.c_value = None
         self.extractors = [ContentX()]
-        self.dizipal_referer = self.main_url + "/" # Dizipal ana sayfasını referer olarak ayarla
+        self.dizipal_referer = self.main_url + "/" 
         HEADERS['Referer'] = self.dizipal_referer
 
     async def init_session(self):
@@ -255,7 +242,7 @@ class DiziPalOrijinal:
         """Ana sayfadan dizileri kazı ve JSON olarak kaydet."""
         await self.init_session()
         # Örnek olarak tek bir bölümü test edelim
-        ornek_bolum_url = "https://dizipal935.com/bolum/yesilcam-1x1" # Test etmek istediğiniz bölüm URL'i
+        ornek_bolum_url = "https://dizipal935.com/bolum/yesilcam-1x1" 
         
         logger.info(f"Tek bölüm testi başlatılıyor: {ornek_bolum_url}")
 
@@ -277,10 +264,7 @@ class DiziPalOrijinal:
             logger.error("\n--- TEST BAŞARISIZ ---")
             logger.error("Video linki veya altyazı bulunamadı.")
 
-
 # Ana çalıştırma
 if __name__ == "__main__":
     dizipal = DiziPalOrijinal()
-    # Tüm siteyi kazımak yerine tek bir bölümü test etmek için `calistir` fonksiyonunu kullanıyoruz.
-    # Tüm siteyi kazımak isterseniz `calistir` fonksiyonunun içeriğini eski haline getirebilirsiniz.
     asyncio.run(dizipal.calistir())
