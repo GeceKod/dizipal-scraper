@@ -74,43 +74,63 @@ class ContentX(ExtractorApi):
                 page.on("pageerror", lambda err: logger.error(f"Tarayıcı Sayfa Hatası: {err}"))
                 page.on("requestfailed", lambda request: logger.warning(f"Tarayıcı İstek Hatası: {request.url} - {request.failure().error_text}"))
 
+                # DEĞİŞİKLİK: iframe'in ham yanıtını yakalamak için
+                raw_html_response = []
+                def handle_response(response):
+                    if response.url == url and response.status == 200:
+                        raw_html_response.append(response)
+
+                page.on('response', handle_response)
+
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
-                # DEĞİŞİKLİK: wait_until="domcontentloaded" kullanıldı
-                await page.goto(url, timeout=90000, wait_until="domcontentloaded", referer=referer) 
+                # "commit" sadece navigation'ın başladığını garanti eder, daha hızlı döner.
+                # Daha sonra response'un gelmesini bekleyeceğiz.
+                await page.goto(url, timeout=90000, wait_until="commit", referer=referer) 
+                
+                # Yanıtın gelmesini bekle
+                if not raw_html_response:
+                    # Alternatif olarak page.wait_for_response kullanabiliriz
+                    try:
+                        response = await page.wait_for_response(lambda r: r.url == url and r.status == 200, timeout=60000)
+                        raw_html_response.append(response)
+                    except Exception as e:
+                        logger.error(f"ContentX: Iframe URL'si için yanıt alınamadı: {e}")
+                        await browser.close()
+                        return {"linkler": linkler, "altyazilar": altyazilar}
 
-                # Sayfanın tamamen yüklenmesi için kısa bir bekleme ekleyebiliriz (isteğe bağlı)
-                # await asyncio.sleep(5) 
-                
-                # DEĞİŞİKLİK: Doğrudan page.content() alıp regex ile arama yapıyoruz
-                i_source = await page.content()
-                logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
-                
-                # Kotlin kodundaki regex'e benzer şekilde tek veya çift tırnak için esnek regex kullanıyoruz.
-                open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
-                
-                if open_player_match:
-                    i_extract_val = open_player_match.group(1)
-                    logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
-                    parsed_url = urlparse(url)
-                    base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                if raw_html_response:
+                    i_source_bytes = await raw_html_response[0].body()
+                    i_source = i_source_bytes.decode('utf-8') # UTF-8 olarak çöz
+                    logger.info(f"ContentX: Ham iframe yanıtı (i_source):\n{i_source}")
+
+                    # Kotlin kodundaki regex'e benzer şekilde tek veya çift tırnak için esnek regex kullanıyoruz.
+                    open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
                     
-                    source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                    logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
+                    if open_player_match:
+                        i_extract_val = open_player_match.group(1)
+                        logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
+                        parsed_url = urlparse(url)
+                        base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                        
+                        source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                        logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
 
-                    await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
-                    vid_source = await page.content()
+                        await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
+                        vid_source = await page.content()
 
-                    vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
-                    if vid_extract_match:
-                        m3u_link = vid_extract_match.group(1).replace("\\", "")
-                        logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
-                        linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                        if callback:
-                            await callback(linkler[-1])
+                        vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
+                        if vid_extract_match:
+                            m3u_link = vid_extract_match.group(1).replace("\\", "")
+                            logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
+                            linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
+                            if callback:
+                                await callback(linkler[-1])
+                        else:
+                            logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
                     else:
-                        logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
+                        logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
                 else:
-                    logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
+                    logger.error("ContentX: Iframe URL'si için ham yanıt alınamadı.")
 
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
