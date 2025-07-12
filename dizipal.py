@@ -35,7 +35,7 @@ def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
         ciphertext = base64.b64decode(ciphertext_base64)
         key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
-        plaintext = cipher.decrypt(ciphertext)
+        plaintext = cipher.decrypt(cipher.decrypt(ciphertext))
         padding_len = plaintext[-1]
         plaintext = plaintext[:-padding_len]
         result = plaintext.decode('utf-8')
@@ -71,10 +71,19 @@ class ContentX(ExtractorApi):
                 await page.goto(url, timeout=90000, wait_until="domcontentloaded", referer=referer)
 
                 # ####################################################################
-                # ## YENİ EKLENEN DÜZELTME: iFrame'deki Cloudflare koruması için bekleme
+                # ## AKILLI BEKLEME: Cloudflare testinin geçildiğinin kanıtı olan
+                # ## 'window.openPlayer' script'i sayfada görünene kadar bekle.
                 # ####################################################################
-                logger.info("iFrame içindeki Cloudflare korumasının çözülmesi için 15 saniye bekleniyor...")
-                await page.wait_for_timeout(15000)
+                try:
+                    logger.info("iFrame içindeki Cloudflare koruması bekleniyor...")
+                    # Sayfada 'window.openPlayer' metnini içeren bir <script> etiketi görünene kadar 60 saniye bekle.
+                    await page.wait_for_selector("script:has-text('window.openPlayer')", timeout=60000)
+                    logger.info("Cloudflare koruması başarıyla geçildi, 'window.openPlayer' script'i bulundu.")
+                except Exception:
+                    logger.error("Bekleme süresi doldu, 'window.openPlayer' script'i bulunamadı. Sayfa Cloudflare'de takılmış olabilir.")
+                    await page.screenshot(path='cloudflare_error.png') # Sorun olursa kanıt için ekran görüntüsü al
+                    await browser.close()
+                    return {"linkler": [], "altyazilar": []}
 
                 i_source = await page.content()
                 
@@ -147,8 +156,9 @@ class DiziPalOrijinal:
                 logger.info(f"Ana sayfa ({self.main_url}) açılıyor...")
                 await page.goto(self.main_url, timeout=90000, wait_until="domcontentloaded")
 
-                logger.info("Bot korumasının çözülmesi için 10 saniye bekleniyor...")
-                await page.wait_for_timeout(10000)
+                logger.info("Ana sayfadaki bot korumasının çözülmesi için bekleniyor...")
+                # cKey'in bulunduğu input'u görene kadar bekle
+                await page.wait_for_selector("input[name=cKey]", timeout=60000)
 
                 page_content = await page.content()
                 soup = BeautifulSoup(page_content, 'html.parser')
@@ -158,8 +168,7 @@ class DiziPalOrijinal:
                 self.c_value = soup.select_one("input[name=cValue]")['value'] if soup.select_one("input[name=cValue]") else None
                 
                 if not self.c_key or not self.c_value:
-                    print("\n" + "="*80 + "\nHATA DEBUG: ANA SAYFA HTML İÇERİĞİ\n" + "-"*80 + f"\n{page_content}\n" + "="*80 + "\n")
-                    raise ValueError("cKey veya cValue alınamadı. Sayfa içeriği yukarıda gösterilmiştir.")
+                    raise ValueError("cKey veya cValue alınamadı.")
                 
                 logger.info(f"Oturum bilgileri başarıyla alındı.")
                 self._session_initialized = True
@@ -191,16 +200,15 @@ class DiziPalOrijinal:
                 logger.info(f"Link sayfasına erişiliyor: {data}")
                 await page.goto(data, timeout=90000, wait_until="load")
                 
-                await page.wait_for_timeout(3000)
+                logger.info("Bölüm sayfasındaki şifreli verinin yüklenmesi bekleniyor...")
+                await page.wait_for_selector("div[data-rm-k]", timeout=60000)
 
                 page_content = await page.content()
                 soup = BeautifulSoup(page_content, 'html.parser')
 
                 hidden_json_tag = soup.select_one("div[data-rm-k]")
                 if not hidden_json_tag:
-                    logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
-                    await browser.close()
-                    return False
+                    raise ValueError("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
 
                 obj = json.loads(hidden_json_tag.text)
                 passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
