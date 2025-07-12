@@ -68,24 +68,24 @@ class ContentX(ExtractorApi):
                 page = await page_context.new_page()
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
-                # DEĞİŞİKLİK: iframe URL'sine giderken networkidle bekleme stratejisi kullanıldı.
-                # Bu, tüm ağ isteklerinin tamamlanmasını bekleyerek Cloudflare gibi korumaları aşmaya yardımcı olabilir.
                 await page.goto(url, timeout=90000, wait_until="networkidle", referer=referer)
 
                 try:
                     logger.info("iFrame içindeki Cloudflare koruması bekleniyor...")
-                    # DEĞİŞİKLİK: window.openPlayer script'i için bekleme süresi artırıldı ve
-                    # script'in varlığını kontrol etmek için page.evaluate kullanıldı.
-                    # Bu, sayfa tamamen yüklendiğinde bile script'in dinamik olarak eklenmesini bekler.
                     await page.wait_for_function("() => window.openPlayer !== undefined", timeout=90000)
                     logger.info("Cloudflare koruması başarıyla geçildi, 'window.openPlayer' script'i bulundu.")
                 except Exception as e:
                     logger.error(f"Bekleme süresi doldu, 'window.openPlayer' script'i bulunamadı. Sayfa Cloudflare'de takılmış olabilir. Hata: {e}")
-                    await page.screenshot(path='cloudflare_error_iframe.png') # Hata durumunda ekran görüntüsü al
+                    await page.screenshot(path='cloudflare_error_iframe.png')
                     await browser.close()
                     return {"linkler": [], "altyazilar": []}
 
                 i_source = await page.content()
+                # DEĞİŞİKLİK: iframe içeriğini loglama
+                logger.info(f"ContentX: Iframe içeriği (i_source) - İlk 500 karakter: {i_source[:500]}...")
+                # Tam içeriği görmek isterseniz aşağıdaki satırın yorumunu kaldırın (Çok uzun olabilir!)
+                # logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
+
                 linkler = []
                 altyazilar = []
 
@@ -99,7 +99,6 @@ class ContentX(ExtractorApi):
                     source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
                     logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
 
-                    # DEĞİŞİKLİK: source2.php adresine giderken de networkidle bekleme stratejisi kullanıldı.
                     await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
                     vid_source = await page.content()
 
@@ -201,8 +200,6 @@ class DiziPalOrijinal:
                 await page.goto(data, timeout=90000, wait_until="load")
                 
                 logger.info("Bölüm sayfasındaki şifreli verinin yüklenmesi bekleniyor...")
-                # DEĞİŞİKLİK: Gizli öğeye erişim için 'state="attached"' kullanıldı
-                # Bu, öğenin DOM'da olmasını bekler, görünür olmasını değil.
                 await page.wait_for_selector("div[data-rm-k]", state="attached", timeout=60000) 
                 
                 page_content = await page.content()
@@ -212,8 +209,6 @@ class DiziPalOrijinal:
                 if not hidden_json_tag:
                     raise ValueError("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
 
-                # hidden_json_tag.text zaten öğenin metin içeriğini alacaktır.
-                # Log çıktısında JSON formatında olduğu için bu şekilde bırakıldı.
                 obj = json.loads(hidden_json_tag.text) 
                 passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
                 decrypted_content = decrypt(passphrase, obj['salt'], obj['iv'], obj['ciphertext'])
