@@ -5,7 +5,6 @@ import re
 import json
 import logging
 import requests
-from playwright_stealth import stealth_async
 
 # Selenium için gerekli kütüphaneler
 from selenium import webdriver
@@ -17,7 +16,8 @@ import undetected_chromedriver as uc
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 # Playwright için gerekli kütüphaneler (init_session'da hala kullanılıyor)
-from playwright.async_api import async_playwright # Bu satırın varlığı ve doğruluğu önemli!
+from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 # Loglama ayarları
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -75,7 +75,11 @@ class ContentX(ExtractorApi):
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument(f"user-agent={HEADERS['User-Agent']}")
-            
+            options.add_argument("--disable-gpu") # GPU hızlandırmayı kapat (headless için faydalı)
+            options.add_argument("--disable-extensions") # Uzantıları devre dışı bırak
+            # options.add_argument("--blink-settings=imagesEnabled=false") # İsteğe bağlı: görselleri devre dışı bırak (hız ve gizlilik için)
+            options.add_argument("--disable-setuid-sandbox") # Zaten vardı, tekrar ekledik
+
             # Proxy ayarı
             if PROXY_SERVER:
                 options.add_argument(f'--proxy-server=socks5://{PROXY_SERVER}')
@@ -83,21 +87,29 @@ class ContentX(ExtractorApi):
             # Tarayıcıyı başlat
             logger.info("ContentX: Selenium ile Chrome başlatılıyor...")
             driver = uc.Chrome(options=options)
-            driver.set_page_load_timeout(90) # Sayfa yükleme zaman aşımı
+            driver.set_page_load_timeout(120) # Sayfa yükleme zaman aşımını artırdık
 
             logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
             driver.get(url)
 
-            # Cloudflare veya dinamik içeriğin yüklenmesini bekle
+            # Cloudflare bypass attempt:
+            # Cloudflare'in çözülmesini veya gerçek sayfanın yüklenmesini bekle
             try:
-                WebDriverWait(driver, 60).until(
-                    lambda d: d.execute_script("return document.readyState") == "complete"
+                logger.info("ContentX: Cloudflare aşımı veya sayfa yüklemesi bekleniyor...")
+                WebDriverWait(driver, 90).until( # Bekleme süresini artırdık
+                    lambda d: d.execute_script("return document.readyState") == "complete" and
+                              "Attention Required!" not in d.title and # Cloudflare başlığı olmamalı
+                              "dplayer82.site" in d.current_url # Doğru alan adında olmalı
                 )
-                logger.info("ContentX: Sayfa yüklemesi tamamlandı.")
+                logger.info("ContentX: Sayfa yüklemesi tamamlandı ve Cloudflare aşıldı gibi görünüyor.")
             except TimeoutException:
-                logger.warning("ContentX: Sayfa yüklemesi zaman aşımına uğradı, ancak devam ediliyor.")
+                logger.warning("ContentX: Sayfa yüklemesi veya Cloudflare aşımı zaman aşımına uğradı.")
+                driver.save_screenshot('cloudflare_blocked_iframe_selenium.png') # Hata durumunda ekran görüntüsü al
+                driver.quit()
+                return {"linkler": linkler, "altyazilar": altyazilar}
             except Exception as e:
-                logger.error(f"ContentX: Sayfa yüklemesi sırasında hata: {e}")
+                logger.error(f"ContentX: Sayfa yüklemesi veya Cloudflare aşımı sırasında hata: {e}")
+                driver.save_screenshot('cloudflare_blocked_iframe_selenium.png') # Hata durumunda ekran görüntüsü al
                 driver.quit()
                 return {"linkler": linkler, "altyazilar": altyazilar}
 
@@ -160,8 +172,6 @@ class DiziPalOrijinal:
 
     async def init_session(self):
         # Ana sayfa için hala Playwright kullanıyoruz
-        # async_playwright'ın import edildiğinden emin olmalıyız.
-        # En üstte import edilmiş durumda.
         async with async_playwright() as p:
             browser = None
             try:
@@ -205,7 +215,7 @@ class DiziPalOrijinal:
         
         # Bu kısım hala Playwright kullanıyor, çünkü ana sayfa oturumu burada başlatılıyor.
         # Sadece ContentX extractor'ını Selenium'a taşıdık.
-        async with async_playwright() as p: # Bu blok içinde async_playwright kullanılıyor
+        async with async_playwright() as p:
             browser = None
             try:
                 browser_options = {'headless': True}
