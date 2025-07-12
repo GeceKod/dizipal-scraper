@@ -16,9 +16,7 @@ import requests
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ####################################################################
-# ## İSTEK ÜZERİNE PROXY BİLGİSİ GÜNCELLENDİ
-# ####################################################################
+# Proxy ayarları
 PROXY = {
     "server": "socks5://45.89.28.226:12915"
 }
@@ -165,35 +163,67 @@ class DiziPalOrijinal:
                     await browser.close()
                 raise
 
+    # ####################################################################
+    # ## 'div[data-rm-k]' HATASINI GİDERMEK İÇİN GÜNCELLENMİŞ FONKSİYON
+    # ## 'requests' yerine tekrar 'playwright' kullanılıyor.
+    # ####################################################################
     async def load_links(self, data, is_casting, subtitle_callback, callback):
         await self.init_session()
         
-        try:
-            dizipal_page_req = requests.get(data, headers=HEADERS, cookies=self.session_cookies)
-            soup = BeautifulSoup(dizipal_page_req.text, 'html.parser')
+        async with async_playwright() as p:
+            browser = None
+            try:
+                browser_options = {'headless': True}
+                if PROXY:
+                    browser_options['proxy'] = PROXY
+                browser = await p.firefox.launch(**browser_options)
+                context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+                await stealth_async(context)
 
-            hidden_json_tag = soup.select_one("div[data-rm-k]")
-            if not hidden_json_tag:
-                logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
+                # Oturumun devam etmesi için ana sayfadan aldığımız çerezleri ekliyoruz
+                if self.session_cookies:
+                    await context.add_cookies([{"name": name, "value": value, "url": self.main_url} for name, value in self.session_cookies.items()])
+                
+                page = await context.new_page()
+                
+                logger.info(f"Link sayfasına erişiliyor: {data}")
+                await page.goto(data, timeout=90000, wait_until="load")
+                
+                # JavaScript'in çalışmasına izin vermek için kısa bir bekleme
+                await page.wait_for_timeout(3000)
+
+                page_content = await page.content()
+                soup = BeautifulSoup(page_content, 'html.parser')
+
+                hidden_json_tag = soup.select_one("div[data-rm-k]")
+                if not hidden_json_tag:
+                    logger.error("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
+                    await browser.close()
+                    return False
+
+                obj = json.loads(hidden_json_tag.text)
+                passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
+                decrypted_content = decrypt(passphrase, obj['salt'], obj['iv'], obj['ciphertext'])
+                iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
+                logger.info(f"Çözülen iframe URL: {iframe_url}")
+
+                # Browser context'ini extractor'a devrederek yeniden başlatmayı önleyebiliriz
+                # ancak şimdilik basit tutmak adına her extractor kendi işini yapsın.
+                await browser.close() # Bu browser'ı kapatıp extractor'da yenisini açalım.
+
+                for extractor in self.extractors:
+                    result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
+                    if result and result.get("linkler"):
+                        return True
+                
+                logger.warning("Tüm extractor'lar denendi ancak link bulunamadı.")
                 return False
 
-            obj = json.loads(hidden_json_tag.text)
-            passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
-            decrypted_content = decrypt(passphrase, obj['salt'], obj['iv'], obj['ciphertext'])
-            iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
-            logger.info(f"Çözülen iframe URL: {iframe_url}")
-
-            for extractor in self.extractors:
-                result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
-                if result and result.get("linkler"):
-                    return True
-            
-            logger.warning("Tüm extractor'lar denendi ancak link bulunamadı.")
-            return False
-
-        except Exception as e:
-            logger.error(f"Link çıkarma hatası: {e}", exc_info=True)
-            return False
+            except Exception as e:
+                logger.error(f"Link çıkarma hatası: {e}", exc_info=True)
+                if browser:
+                    await browser.close()
+                return False
 
     async def calistir(self):
         ornek_bolum_url = "https://dizipal935.com/bolum/yesilcam-1x1"
