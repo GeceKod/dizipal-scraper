@@ -85,7 +85,7 @@ class ContentX(ExtractorApi):
             if referer:
                 request_headers['Referer'] = referer
 
-            # Proxy ayarı cloudscraper için farklı olabilir, burada doğrudan requests'in proxy'si gibi ele alalım
+            # Proxy ayarı cloudscraper için zaten doğru yapılandırılmıştı.
             proxies = None
             if PROXY_SERVER:
                 # SOCKS5 proxy'yi cloudscraper'a uygun formatta ayarla
@@ -93,19 +93,22 @@ class ContentX(ExtractorApi):
                     "http": f"socks5://{PROXY_SERVER}",
                     "https": f"socks5://{PROXY_SERVER}",
                 }
+                logger.info(f"ContentX: Cloudscraper için proxy ayarlandı: {PROXY_SERVER}")
 
             # iframe URL'sine istek gönder (Cloudflare bypass denemesi)
             response = scraper.get(url, headers=request_headers, timeout=60, proxies=proxies)
 
             if response.status_code != 200:
                 logger.error(f"ContentX: Iframe URL'sinden yanıt alınamadı. Status Code: {response.status_code}")
-                logger.error(f"ContentX: Iframe yanıt içeriği:\n{response.text[:500]}...") # İlk 500 karakteri logla
+                # Hata durumunda da tam içeriği logla
+                logger.error(f"ContentX: Iframe yanıt içeriği (Hata Durumu):\n{response.text}") 
                 if "Attention Required!" in response.text or "Cloudflare" in response.text:
                     logger.warning("ContentX: Cloudflare tarafından engellendiği tespit edildi.")
                 return {"linkler": linkler, "altyazilar": altyazilar}
 
             i_source = response.text
-            logger.info(f"ContentX: Iframe içeriği (i_source) - İlk 500 karakter:\n{i_source[:500]}...")
+            # DEĞİŞİKLİK: iframe içeriğinin tamamını logla
+            logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
             
             # Şimdi, i_source'dan regex ile çıkarma işlemine devam et
             open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
