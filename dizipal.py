@@ -199,8 +199,10 @@ class DiziPalOrijinal:
                 await page.goto(data, timeout=90000, wait_until="load")
                 
                 logger.info("Bölüm sayfasındaki şifreli verinin yüklenmesi bekleniyor...")
-                await page.wait_for_selector("div[data-rm-k]", timeout=60000)
-
+                # DEĞİŞİKLİK BAŞLANGICI: Gizli öğeye erişim için 'state="attached"' kullanıldı
+                await page.wait_for_selector("div[data-rm-k]", state="attached", timeout=60000) 
+                # DEĞİŞİKLİK SONU
+                
                 page_content = await page.content()
                 soup = BeautifulSoup(page_content, 'html.parser')
 
@@ -208,7 +210,10 @@ class DiziPalOrijinal:
                 if not hidden_json_tag:
                     raise ValueError("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
 
-                obj = json.loads(hidden_json_tag.text)
+                # hidden_json_tag.text zaten öğenin metin içeriğini alacaktır.
+                # Eğer içeriği JSON değil de doğrudan bir link ise, bu kısım değişebilir.
+                # Ancak logda JSON formatında olduğu için bu şekilde bırakıldı.
+                obj = json.loads(hidden_json_tag.text) 
                 passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
                 decrypted_content = decrypt(passphrase, obj['salt'], obj['iv'], obj['ciphertext'])
                 iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
