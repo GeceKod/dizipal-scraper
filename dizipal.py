@@ -28,12 +28,12 @@ HEADERS = {
 }
 
 # Şifre çözme fonksiyonu
-def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
+def decrypt(passphraze, salt_hex, iv_hex, ciphertext_base64):
     try:
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
-        key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
+        key = PBKDF2(passphraze, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
         padding_len = plaintext[-1]
@@ -82,41 +82,17 @@ class ContentX(ExtractorApi):
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
-                # DEĞİŞİKLİK: page.evaluate kullanarak parametreyi daha kapsamlı arama
-                logger.info("ContentX: 'window.openPlayer' parametresi için page.evaluate çalıştırılıyor (genişletilmiş arama)...")
-                i_extract_val = await page.evaluate('''() => {
-                    // Tüm script etiketlerini ve HTML'deki metin içeriğini kontrol et
-                    const scripts = document.querySelectorAll('script');
-                    let foundParam = null;
-
-                    // Script etiketlerinin içeriğini kontrol et
-                    for (const script of scripts) {
-                        const scriptText = script.innerHTML;
-                        const match = scriptText.match(/window\\.openPlayer\\(['"]([^'"]+)['"]\\)/);
-                        if (match && match[1]) {
-                            foundParam = match[1];
-                            break; // Bulunduğunda döngüyü sonlandır
-                        }
-                    }
-
-                    // Eğer script etiketlerinde bulunamadıysa, tüm belge içeriğini kontrol et
-                    if (!foundParam) {
-                        const fullHtml = document.documentElement.outerHTML;
-                        const match = fullHtml.match(/window\\.openPlayer\\(['"]([^'"]+)['"]\\)/);
-                        if (match && match[1]) {
-                            foundParam = match[1];
-                        }
-                    }
-                    return foundParam;
-                }''')
-
-                # DEĞİŞİKLİK: i_source'un tamamını loglama (çok uzun olabilir, dikkatli kullanın)
                 i_source_full = await page.content()
                 logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source_full}")
                 
-
-                if i_extract_val:
-                    logger.info(f"ContentX: page.evaluate ile alınan parametre: {i_extract_val}")
+                # DEĞİŞİKLİK: page.evaluate yerine doğrudan i_source_full üzerinde regex arama
+                # Kotlin kodundaki regex'e benzer şekilde tek tırnaklı parametre arıyoruz.
+                # Ayrıca hem tek hem çift tırnak için esnek bir regex kullanıyoruz.
+                open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source_full, re.IGNORECASE)
+                
+                if open_player_match:
+                    i_extract_val = open_player_match.group(1)
+                    logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
                     parsed_url = urlparse(url)
                     base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
                     
@@ -136,7 +112,7 @@ class ContentX(ExtractorApi):
                     else:
                         logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
                 else:
-                    logger.warning(f"ContentX: 'window.openPlayer' parametresi page.evaluate ile bulunamadı.")
+                    logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
 
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
@@ -234,8 +210,8 @@ class DiziPalOrijinal:
                     raise ValueError("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
 
                 obj = json.loads(hidden_json_tag.text) 
-                passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
-                decrypted_content = decrypt(passphrase, obj['salt'], obj['iv'], obj['ciphertext'])
+                passphraze = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
+                decrypted_content = decrypt(passphraze, obj['salt'], obj['iv'], obj['ciphertext'])
                 iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
                 logger.info(f"Çözülen iframe URL: {iframe_url}")
 
