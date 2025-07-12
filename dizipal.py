@@ -5,6 +5,7 @@ import re
 import json
 import logging
 import requests
+from playwright_stealth import stealth_async
 
 # Selenium için gerekli kütüphaneler
 from selenium import webdriver
