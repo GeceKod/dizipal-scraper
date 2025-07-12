@@ -57,6 +57,9 @@ class ContentX(ExtractorApi):
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None, context=None):
         async with async_playwright() as p:
             browser = None
+            # DEĞİŞİKLİK: linkler ve altyazilar listelerini her zaman başta tanımla
+            linkler = []
+            altyazilar = []
             try:
                 browser_options = {'headless': True}
                 if PROXY:
@@ -72,27 +75,35 @@ class ContentX(ExtractorApi):
 
                 try:
                     logger.info("iFrame içindeki Cloudflare koruması bekleniyor...")
-                    # window.openPlayer fonksiyonunun tanımlanmasını bekle
                     await page.wait_for_function("() => window.openPlayer !== undefined", timeout=90000)
                     logger.info("Cloudflare koruması başarıyla geçildi, 'window.openPlayer' script'i bulundu.")
                 except Exception as e:
                     logger.error(f"Bekleme süresi doldu, 'window.openPlayer' script'i bulunamadı. Sayfa Cloudflare'de takılmış olabilir. Hata: {e}")
                     await page.screenshot(path='cloudflare_error_iframe.png')
                     await browser.close()
-                    return {"linkler": [], "altyazilar": []}
+                    return {"linkler": linkler, "altyazilar": altyazilar} # Hata durumunda boş listelerle dön
 
-                # DEĞİŞİKLİK BAŞLANGICI: page.evaluate kullanarak parametreyi doğrudan alma
-                logger.info("ContentX: 'window.openPlayer' parametresi için page.evaluate çalıştırılıyor...")
+                # DEĞİŞİKLİK: page.evaluate kullanarak parametreyi tüm script etiketleri içinde arama
+                logger.info("ContentX: 'window.openPlayer' parametresi için page.evaluate çalıştırılıyor (tüm scriptler aranıyor)...")
                 i_extract_val = await page.evaluate('''() => {
-                    // Sayfanın tüm HTML içeriğini al
-                    const scriptContent = document.documentElement.outerHTML;
-                    // window.openPlayer çağrısını ve içindeki parametreyi regex ile bul
-                    const match = scriptContent.match(/window\\.openPlayer\\(['"]([^'"]+)['"]\\)/);
-                    if (match && match[1]) {
-                        return match[1]; // Parametreyi döndür
+                    const scripts = document.querySelectorAll('script');
+                    for (const script of scripts) {
+                        const scriptText = script.innerHTML;
+                        // window.openPlayer çağrısını ve içindeki parametreyi regex ile bul
+                        const match = scriptText.match(/window\\.openPlayer\\(['"]([^'"]+)['"]\\)/);
+                        if (match && match[1]) {
+                            return match[1]; // Parametreyi döndür
+                        }
                     }
                     return null; // Bulunamazsa null döndür
                 }''')
+
+                # DEĞİŞİKLİK: i_source'un tamamını loglama (çok uzun olabilir, dikkatli kullanın)
+                i_source_full = await page.content()
+                logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source_full}")
+                # Eğer tam içerik çok uzunsa, sadece ilk 2000 karakteri loglamak için aşağıdaki satırı kullanabilirsiniz:
+                # logger.info(f"ContentX: Iframe içeriği (i_source) - İlk 2000 karakter: {i_source_full[:2000]}...")
+
 
                 if i_extract_val:
                     logger.info(f"ContentX: page.evaluate ile alınan parametre: {i_extract_val}")
@@ -116,7 +127,6 @@ class ContentX(ExtractorApi):
                         logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
                 else:
                     logger.warning(f"ContentX: 'window.openPlayer' parametresi page.evaluate ile bulunamadı.")
-                # DEĞİŞİKLİK SONU
 
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
@@ -125,7 +135,7 @@ class ContentX(ExtractorApi):
                 logger.error(f"ContentX çıkarma işlemi sırasında bir hata oluştu: {e}", exc_info=True)
                 if browser:
                     await browser.close()
-                return {"linkler": [], "altyazilar": []}
+                return {"linkler": linkler, "altyazilar": altyazilar} # Hata durumunda boş listelerle dön
 
 class DiziPalOrijinal:
     main_url = "https://dizipal935.com"
