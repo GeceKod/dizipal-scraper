@@ -72,6 +72,7 @@ class ContentX(ExtractorApi):
 
                 try:
                     logger.info("iFrame içindeki Cloudflare koruması bekleniyor...")
+                    # window.openPlayer fonksiyonunun tanımlanmasını bekle
                     await page.wait_for_function("() => window.openPlayer !== undefined", timeout=90000)
                     logger.info("Cloudflare koruması başarıyla geçildi, 'window.openPlayer' script'i bulundu.")
                 except Exception as e:
@@ -80,20 +81,21 @@ class ContentX(ExtractorApi):
                     await browser.close()
                     return {"linkler": [], "altyazilar": []}
 
-                i_source = await page.content()
-                # DEĞİŞİKLİK: iframe içeriğini daha fazla loglama
-                logger.info(f"ContentX: Iframe içeriği (i_source) - İlk 1000 karakter: {i_source[:1000]}...")
-                # Tam içeriği görmek isterseniz aşağıdaki satırın yorumunu kaldırın (Çok uzun olabilir!)
-                # logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
+                # DEĞİŞİKLİK BAŞLANGICI: page.evaluate kullanarak parametreyi doğrudan alma
+                logger.info("ContentX: 'window.openPlayer' parametresi için page.evaluate çalıştırılıyor...")
+                i_extract_val = await page.evaluate('''() => {
+                    // Sayfanın tüm HTML içeriğini al
+                    const scriptContent = document.documentElement.outerHTML;
+                    // window.openPlayer çağrısını ve içindeki parametreyi regex ile bul
+                    const match = scriptContent.match(/window\\.openPlayer\\(['"]([^'"]+)['"]\\)/);
+                    if (match && match[1]) {
+                        return match[1]; // Parametreyi döndür
+                    }
+                    return null; // Bulunamazsa null döndür
+                }''')
 
-                linkler = []
-                altyazilar = []
-
-                # DEĞİŞİKLİK: Düzenli ifadeyi tek veya çift tırnak için esnekleştirme
-                open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
-                
-                if open_player_match:
-                    i_extract_val = open_player_match.group(1)
+                if i_extract_val:
+                    logger.info(f"ContentX: page.evaluate ile alınan parametre: {i_extract_val}")
                     parsed_url = urlparse(url)
                     base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
                     
@@ -113,7 +115,8 @@ class ContentX(ExtractorApi):
                     else:
                         logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
                 else:
-                    logger.warning(f"ContentX: 'window.openPlayer' parametresi iframe içinde bulunamadı.")
+                    logger.warning(f"ContentX: 'window.openPlayer' parametresi page.evaluate ile bulunamadı.")
+                # DEĞİŞİKLİK SONU
 
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
