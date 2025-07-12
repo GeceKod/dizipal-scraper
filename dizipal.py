@@ -69,94 +69,60 @@ class ContentX(ExtractorApi):
                 await stealth_async(page_context)
                 page = await page_context.new_page()
 
-                # Video linkini yakalamak için bir Future nesnesi oluştur
-                video_link_future = asyncio.Future()
-
-                # Ağ isteklerini dinle
-                async def handle_response(response):
-                    # source2.php isteğini veya doğrudan video linkini içeren bir yanıtı ara
-                    if "source2.php?v=" in response.url or ".m3u8" in response.url or ".mp4" in response.url:
-                        try:
-                            # Yanıtın metin içeriğini al
-                            response_text = await response.text()
-                            # Eğer yanıt bir JSON ise ve "file" anahtarı içeriyorsa
-                            if response.headers.get("content-type") and "application/json" in response.headers["content-type"]:
-                                try:
-                                    json_data = json.loads(response_text)
-                                    if "file" in json_data:
-                                        # m3u8 linkini çek ve Future'ı tamamla
-                                        m3u_link = json_data["file"].replace("\\", "")
-                                        if not video_link_future.done():
-                                            video_link_future.set_result(m3u_link)
-                                            logger.info(f"ContentX: Ağ isteğinden video linki yakalandı: {m3u_link}")
-                                except json.JSONDecodeError:
-                                    pass # JSON değilse devam et
-                            
-                            # Eğer yanıt doğrudan m3u8 veya mp4 linki ise
-                            elif ".m3u8" in response.url or ".mp4" in response.url:
-                                if not video_link_future.done():
-                                    video_link_future.set_result(response.url)
-                                    logger.info(f"ContentX: Doğrudan video URL'si yakalandı: {response.url}")
-
-                        except Exception as e:
-                            logger.warning(f"ContentX: Ağ yanıtını işlerken hata: {e}")
-
-                page.on("response", handle_response)
+                # DEĞİŞİKLİK: window.openPlayer çağrısını doğrudan yakalamak için init script ekle
+                await page.add_init_script("""
+                    (function() {
+                        const originalOpenPlayer = window.openPlayer;
+                        window.openPlayer = function(param) {
+                            window.__playerParamValue = param; // Parametreyi bir global değişkende sakla
+                            if (originalOpenPlayer) {
+                                originalOpenPlayer.apply(this, arguments); // Orijinal fonksiyonu çağır (varsa)
+                            }
+                        };
+                    })();
+                """)
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
                 await page.goto(url, timeout=90000, wait_until="networkidle", referer=referer)
 
                 try:
                     logger.info("iFrame içindeki Cloudflare koruması bekleniyor...")
-                    await page.wait_for_function("() => window.openPlayer !== undefined", timeout=90000)
-                    logger.info("Cloudflare koruması başarıyla geçildi, 'window.openPlayer' script'i bulundu.")
+                    # 'window.__playerParamValue' değişkeninin tanımlanmasını bekle
+                    # Bu değişken, openPlayer çağrıldığında ayarlanacak.
+                    await page.wait_for_function("() => window.__playerParamValue !== undefined", timeout=90000)
+                    logger.info("Cloudflare koruması başarıyla geçildi ve 'window.openPlayer' çağrısı yakalandı.")
                 except Exception as e:
-                    logger.error(f"Bekleme süresi doldu, 'window.openPlayer' script'i bulunamadı. Sayfa Cloudflare'de takılmış olabilir. Hata: {e}")
+                    logger.error(f"Bekleme süresi doldu, 'window.__playerParamValue' bulunamadı. Sayfa Cloudflare'de takılmış olabilir veya openPlayer çağrılmamış olabilir. Hata: {e}")
                     await page.screenshot(path='cloudflare_error_iframe.png')
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
-                # Video linkinin bulunmasını bekle (veya belirli bir süre sonra zaman aşımına uğra)
-                try:
-                    # Maksimum 30 saniye boyunca video linkinin bulunmasını bekle
-                    final_video_link = await asyncio.wait_for(video_link_future, timeout=30)
-                    logger.info(f"ContentX: Son video linki başarıyla alındı: {final_video_link}")
-                    linkler.append({"kaynak": "ContentX (Network)", "isim": "ContentX Video", "url": final_video_link, "tur": "m3u8"})
-                    if callback:
-                        await callback(linkler[-1])
-                    return {"linkler": linkler, "altyazilar": altyazilar} # Link bulundu, buradan dön
-                except asyncio.TimeoutError:
-                    logger.warning("ContentX: Belirtilen süre içinde video linki ağ isteklerinden yakalanamadı.")
-                    # Eğer ağdan yakalanamazsa, eski regex yöntemini fallback olarak dene
-                    i_source_full = await page.content()
-                    logger.info(f"ContentX: Ağdan bulunamadı, HTML içeriği üzerinde regex denemesi yapılıyor...")
-                    # Regex araması, Kotlin kodundaki gibi tek veya çift tırnak için esnek
-                    open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source_full, re.IGNORECASE)
-                    
-                    if open_player_match:
-                        i_extract_val = open_player_match.group(1)
-                        logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
-                        parsed_url = urlparse(url)
-                        base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-                        
-                        source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                        logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
-
-                        await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
-                        vid_source = await page.content()
-
-                        vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
-                        if vid_extract_match:
-                            m3u_link = vid_extract_match.group(1).replace("\\", "")
-                            logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
-                            linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                            if callback:
-                                await callback(linkler[-1])
-                        else:
-                            logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
-                    else:
-                        logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
+                # Yakalanan parametreyi al
+                i_extract_val = await page.evaluate("window.__playerParamValue")
                 
+                if i_extract_val:
+                    logger.info(f"ContentX: Yakalanan openPlayer parametresi: {i_extract_val}")
+                    parsed_url = urlparse(url)
+                    base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                    
+                    source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                    logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
+
+                    await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
+                    vid_source = await page.content()
+
+                    vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
+                    if vid_extract_match:
+                        m3u_link = vid_extract_match.group(1).replace("\\", "")
+                        logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
+                        linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
+                        if callback:
+                            await callback(linkler[-1])
+                    else:
+                        logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
+                else:
+                    logger.warning(f"ContentX: 'window.openPlayer' parametresi yakalanamadı.")
+
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
 
