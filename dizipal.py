@@ -68,15 +68,20 @@ class ContentX(ExtractorApi):
                 page = await page_context.new_page()
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
-                await page.goto(url, timeout=90000, wait_until="domcontentloaded", referer=referer)
+                # DEĞİŞİKLİK: iframe URL'sine giderken networkidle bekleme stratejisi kullanıldı.
+                # Bu, tüm ağ isteklerinin tamamlanmasını bekleyerek Cloudflare gibi korumaları aşmaya yardımcı olabilir.
+                await page.goto(url, timeout=90000, wait_until="networkidle", referer=referer)
 
                 try:
                     logger.info("iFrame içindeki Cloudflare koruması bekleniyor...")
-                    await page.wait_for_selector("script:has-text('window.openPlayer')", timeout=60000)
+                    # DEĞİŞİKLİK: window.openPlayer script'i için bekleme süresi artırıldı ve
+                    # script'in varlığını kontrol etmek için page.evaluate kullanıldı.
+                    # Bu, sayfa tamamen yüklendiğinde bile script'in dinamik olarak eklenmesini bekler.
+                    await page.wait_for_function("() => window.openPlayer !== undefined", timeout=90000)
                     logger.info("Cloudflare koruması başarıyla geçildi, 'window.openPlayer' script'i bulundu.")
-                except Exception:
-                    logger.error("Bekleme süresi doldu, 'window.openPlayer' script'i bulunamadı. Sayfa Cloudflare'de takılmış olabilir.")
-                    await page.screenshot(path='cloudflare_error.png')
+                except Exception as e:
+                    logger.error(f"Bekleme süresi doldu, 'window.openPlayer' script'i bulunamadı. Sayfa Cloudflare'de takılmış olabilir. Hata: {e}")
+                    await page.screenshot(path='cloudflare_error_iframe.png') # Hata durumunda ekran görüntüsü al
                     await browser.close()
                     return {"linkler": [], "altyazilar": []}
 
@@ -94,7 +99,8 @@ class ContentX(ExtractorApi):
                     source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
                     logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
 
-                    await page.goto(source_url, timeout=90000, wait_until="domcontentloaded", referer=url)
+                    # DEĞİŞİKLİK: source2.php adresine giderken de networkidle bekleme stratejisi kullanıldı.
+                    await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
                     vid_source = await page.content()
 
                     vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
@@ -150,10 +156,6 @@ class DiziPalOrijinal:
                 logger.info(f"Ana sayfa ({self.main_url}) açılıyor...")
                 await page.goto(self.main_url, timeout=90000, wait_until="domcontentloaded")
 
-                # ####################################################################
-                # ## DÜZELTME: 'GİZLİ ELEMAN' hatasını çözmek için 'akıllı bekleme' yerine
-                # ## daha önce başarılı olan 'sabit süreli bekleme' yöntemine dönüldü.
-                # ####################################################################
                 logger.info("Ana sayfadaki bot korumasının çözülmesi için 15 saniye bekleniyor...")
                 await page.wait_for_timeout(15000)
 
@@ -199,9 +201,9 @@ class DiziPalOrijinal:
                 await page.goto(data, timeout=90000, wait_until="load")
                 
                 logger.info("Bölüm sayfasındaki şifreli verinin yüklenmesi bekleniyor...")
-                # DEĞİŞİKLİK BAŞLANGICI: Gizli öğeye erişim için 'state="attached"' kullanıldı
+                # DEĞİŞİKLİK: Gizli öğeye erişim için 'state="attached"' kullanıldı
+                # Bu, öğenin DOM'da olmasını bekler, görünür olmasını değil.
                 await page.wait_for_selector("div[data-rm-k]", state="attached", timeout=60000) 
-                # DEĞİŞİKLİK SONU
                 
                 page_content = await page.content()
                 soup = BeautifulSoup(page_content, 'html.parser')
@@ -211,8 +213,7 @@ class DiziPalOrijinal:
                     raise ValueError("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
 
                 # hidden_json_tag.text zaten öğenin metin içeriğini alacaktır.
-                # Eğer içeriği JSON değil de doğrudan bir link ise, bu kısım değişebilir.
-                # Ancak logda JSON formatında olduğu için bu şekilde bırakıldı.
+                # Log çıktısında JSON formatında olduğu için bu şekilde bırakıldı.
                 obj = json.loads(hidden_json_tag.text) 
                 passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
                 decrypted_content = decrypt(passphrase, obj['salt'], obj['iv'], obj['ciphertext'])
