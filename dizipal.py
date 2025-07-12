@@ -5,15 +5,16 @@ import re
 import json
 import logging
 import requests
+import cloudscraper # cloudscraper eklendi
 
-# Selenium için gerekli kütüphaneler
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import undetected_chromedriver as uc
-from selenium.common.exceptions import TimeoutException, WebDriverException
+# Selenium için gerekli kütüphaneler (ContentX'ten kaldırıldı, sadece ihtiyaç duyulan yerlerde kalacak)
+# from selenium import webdriver
+# from selenium.webdriver.chrome.service import Service
+# from selenium.webdriver.common.by import By
+# from selenium.webdriver.support.ui import WebDriverWait
+# from selenium.webdriver.support import expected_conditions as EC
+# import undetected_chromedriver as uc
+# from selenium.common.exceptions import TimeoutException, WebDriverException
 
 # Playwright için gerekli kütüphaneler (init_session'da hala kullanılıyor)
 from playwright.async_api import async_playwright
@@ -65,58 +66,48 @@ class ContentX(ExtractorApi):
     requires_referer = True
 
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None, context=None):
-        driver = None
         linkler = []
         altyazilar = []
         try:
-            # undetected_chromedriver seçenekleri
-            options = uc.ChromeOptions()
-            options.add_argument("--headless") # Headless modda çalıştır
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument(f"user-agent={HEADERS['User-Agent']}")
-            options.add_argument("--disable-gpu") # GPU hızlandırmayı kapat (headless için faydalı)
-            options.add_argument("--disable-extensions") # Uzantıları devre dışı bırak
-            # options.add_argument("--blink-settings=imagesEnabled=false") # İsteğe bağlı: görselleri devre dışı bırak (hız ve gizlilik için)
-            options.add_argument("--disable-setuid-sandbox") # Zaten vardı, tekrar ekledik
-
-            # Proxy ayarı
-            if PROXY_SERVER:
-                options.add_argument(f'--proxy-server=socks5://{PROXY_SERVER}')
-
-            # Tarayıcıyı başlat
-            logger.info("ContentX: Selenium ile Chrome başlatılıyor...")
-            driver = uc.Chrome(options=options)
-            driver.set_page_load_timeout(120) # Sayfa yükleme zaman aşımını artırdık
-
-            logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
-            driver.get(url)
-
-            # Cloudflare bypass attempt:
-            # Cloudflare'in çözülmesini veya gerçek sayfanın yüklenmesini bekle
-            try:
-                logger.info("ContentX: Cloudflare aşımı veya sayfa yüklemesi bekleniyor...")
-                WebDriverWait(driver, 90).until( # Bekleme süresini artırdık
-                    lambda d: d.execute_script("return document.readyState") == "complete" and
-                              "Attention Required!" not in d.title and # Cloudflare başlığı olmamalı
-                              "dplayer82.site" in d.current_url # Doğru alan adında olmalı
-                )
-                logger.info("ContentX: Sayfa yüklemesi tamamlandı ve Cloudflare aşıldı gibi görünüyor.")
-            except TimeoutException:
-                logger.warning("ContentX: Sayfa yüklemesi veya Cloudflare aşımı zaman aşımına uğradı.")
-                driver.save_screenshot('cloudflare_blocked_iframe_selenium.png') # Hata durumunda ekran görüntüsü al
-                driver.quit()
-                return {"linkler": linkler, "altyazilar": altyazilar}
-            except Exception as e:
-                logger.error(f"ContentX: Sayfa yüklemesi veya Cloudflare aşımı sırasında hata: {e}")
-                driver.save_screenshot('cloudflare_blocked_iframe_selenium.png') # Hata durumunda ekran görüntüsü al
-                driver.quit()
-                return {"linkler": linkler, "altyazilar": altyazilar}
-
-            i_source = driver.page_source
-            logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
+            logger.info(f"ContentX: Cloudscraper ile iframe URL'sine istek gönderiliyor: {url}")
             
-            # Kotlin kodundaki regex'e benzer şekilde tek veya çift tırnak için esnek regex kullanıyoruz.
+            # cloudscraper örneği oluştur
+            scraper = cloudscraper.create_scraper(
+                browser={
+                    'browser': 'firefox', # Tarayıcı taklidi
+                    'platform': 'windows',
+                    'mobile': False
+                }
+            )
+            
+            # İstek için referer başlığını hazırla
+            request_headers = HEADERS.copy()
+            if referer:
+                request_headers['Referer'] = referer
+
+            # Proxy ayarı cloudscraper için farklı olabilir, burada doğrudan requests'in proxy'si gibi ele alalım
+            proxies = None
+            if PROXY_SERVER:
+                # SOCKS5 proxy'yi cloudscraper'a uygun formatta ayarla
+                proxies = {
+                    "http": f"socks5://{PROXY_SERVER}",
+                    "https": f"socks5://{PROXY_SERVER}",
+                }
+
+            # iframe URL'sine istek gönder (Cloudflare bypass denemesi)
+            response = scraper.get(url, headers=request_headers, timeout=60, proxies=proxies)
+
+            if response.status_code != 200:
+                logger.error(f"ContentX: Iframe URL'sinden yanıt alınamadı. Status Code: {response.status_code}")
+                logger.error(f"ContentX: Iframe yanıt içeriği:\n{response.text[:500]}...") # İlk 500 karakteri logla
+                if "Attention Required!" in response.text or "Cloudflare" in response.text:
+                    logger.warning("ContentX: Cloudflare tarafından engellendiği tespit edildi.")
+                return {"linkler": linkler, "altyazilar": altyazilar}
+
+            i_source = response.text
+            logger.info(f"ContentX: Iframe içeriği (i_source) - İlk 500 karakter:\n{i_source[:500]}...")
+            
+            # Şimdi, i_source'dan regex ile çıkarma işlemine devam et
             open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
             
             if open_player_match:
@@ -128,10 +119,13 @@ class ContentX(ExtractorApi):
                 source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
                 logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
 
-                # source2.php adresine git ve içeriğini al
-                driver.get(source_url)
-                vid_source = driver.page_source
+                # source2.php adresine tekrar cloudscraper ile istek gönder
+                source2_response = scraper.get(source_url, headers=request_headers, timeout=60, proxies=proxies)
+                if source2_response.status_code != 200:
+                    logger.error(f"ContentX: source2.php adresinden yanıt alınamadı. Status Code: {source2_response.status_code}")
+                    return {"linkler": linkler, "altyazilar": altyazilar}
 
+                vid_source = source2_response.text
                 vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
                 if vid_extract_match:
                     m3u_link = vid_extract_match.group(1).replace("\\", "")
@@ -144,18 +138,10 @@ class ContentX(ExtractorApi):
             else:
                 logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
 
-            driver.quit()
             return {"linkler": linkler, "altyazilar": altyazilar}
 
-        except WebDriverException as e:
-            logger.error(f"ContentX Selenium WebDriver hatası: {e}", exc_info=True)
-            if driver:
-                driver.quit()
-            return {"linkler": linkler, "altyazilar": altyazilar}
         except Exception as e:
-            logger.error(f"ContentX çıkarma işlemi sırasında genel hata: {e}", exc_info=True)
-            if driver:
-                driver.quit()
+            logger.error(f"ContentX çıkarma işlemi sırasında genel hata (Cloudscraper): {e}", exc_info=True)
             return {"linkler": linkler, "altyazilar": altyazilar}
 
 class DiziPalOrijinal:
@@ -214,7 +200,6 @@ class DiziPalOrijinal:
         await self.init_session()
         
         # Bu kısım hala Playwright kullanıyor, çünkü ana sayfa oturumu burada başlatılıyor.
-        # Sadece ContentX extractor'ını Selenium'a taşıdık.
         async with async_playwright() as p:
             browser = None
             try:
@@ -252,7 +237,7 @@ class DiziPalOrijinal:
                 await browser.close()
 
                 for extractor in self.extractors:
-                    # ContentX artık Selenium kullanıyor
+                    # ContentX artık cloudscraper kullanıyor
                     result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
                     if result and result.get("linkler"):
                         return True
