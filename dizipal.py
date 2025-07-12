@@ -3,37 +3,43 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import re
 import json
-from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
-from Crypto.Cipher import AES
-from Crypto.Protocol.KDF import PBKDF2
-from Crypto.Hash import SHA512
-import base64
 import logging
 import requests
+
+# Selenium için gerekli kütüphaneler
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import undetected_chromedriver as uc
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 # Loglama ayarları
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Proxy ayarları
-PROXY = {
-    "server": "socks5://45.89.28.226:12915"
-}
+# Proxy ayarları (Selenium için farklı yapılandırılabilir)
+# undetected_chromedriver proxy desteği doğrudan argümanlarla sağlanır.
+PROXY_SERVER = "45.89.28.226:12915" # SOCKS5 proxy için sadece IP:Port
 
-# Başlık ayarları
+# Başlık ayarları (Selenium için User-Agent doğrudan ayarlanır)
 HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
 }
 
 # Şifre çözme fonksiyonu
-def decrypt(passphraze, salt_hex, iv_hex, ciphertext_base64):
+from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Hash import SHA512
+import base64
+
+def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
     try:
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
-        key = PBKDF2(passphraze, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
+        key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
         padding_len = plaintext[-1]
@@ -55,86 +61,88 @@ class ContentX(ExtractorApi):
     requires_referer = True
 
     async def get_url(self, url, referer=None, subtitle_callback=None, callback=None, context=None):
-        async with async_playwright() as p:
-            browser = None
-            linkler = []
-            altyazilar = []
+        driver = None
+        linkler = []
+        altyazilar = []
+        try:
+            # undetected_chromedriver seçenekleri
+            options = uc.ChromeOptions()
+            options.add_argument("--headless") # Headless modda çalıştır
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument(f"user-agent={HEADERS['User-Agent']}")
+            
+            # Proxy ayarı
+            if PROXY_SERVER:
+                options.add_argument(f'--proxy-server=socks5://{PROXY_SERVER}')
+
+            # Tarayıcıyı başlat
+            logger.info("ContentX: Selenium ile Chrome başlatılıyor...")
+            driver = uc.Chrome(options=options)
+            driver.set_page_load_timeout(90) # Sayfa yükleme zaman aşımı
+
+            logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
+            driver.get(url)
+
+            # Cloudflare veya dinamik içeriğin yüklenmesini bekle
+            # JavaScript hataları olsa bile sayfa kaynağını almayı deneyeceğiz
             try:
-                browser_options = {'headless': True}
-                if PROXY:
-                    browser_options['proxy'] = PROXY
+                # Sayfadaki tüm scriptlerin yüklenmesini beklemek için daha genel bir bekleme
+                WebDriverWait(driver, 60).until(
+                    lambda d: d.execute_script("return document.readyState") == "complete"
+                )
+                logger.info("ContentX: Sayfa yüklemesi tamamlandı.")
+            except TimeoutException:
+                logger.warning("ContentX: Sayfa yüklemesi zaman aşımına uğradı, ancak devam ediliyor.")
+            except Exception as e:
+                logger.error(f"ContentX: Sayfa yüklemesi sırasında hata: {e}")
+                driver.quit()
+                return {"linkler": linkler, "altyazilar": altyazilar}
+
+            i_source = driver.page_source
+            logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
+            
+            # Kotlin kodundaki regex'e benzer şekilde tek veya çift tırnak için esnek regex kullanıyoruz.
+            open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
+            
+            if open_player_match:
+                i_extract_val = open_player_match.group(1)
+                logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
+                parsed_url = urlparse(url)
+                base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
                 
-                browser = await p.firefox.launch(**browser_options)
-                page_context = await browser.new_context(user_agent=HEADERS["User-Agent"])
-                await stealth_async(page_context)
-                page = await page_context.new_page()
+                source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
 
-                # Console loglarını yakalamak için listener ekle (debug amaçlı)
-                page.on("console", lambda msg: logger.info(f"Tarayıcı Konsolu ({msg.type}): {msg.text}"))
-                page.on("pageerror", lambda err: logger.error(f"Tarayıcı Sayfa Hatası: {err}"))
-                page.on("requestfailed", lambda request: logger.warning(f"Tarayıcı İstek Hatası: {request.url} - {request.failure().error_text}"))
+                # source2.php adresine git ve içeriğini al
+                driver.get(source_url)
+                vid_source = driver.page_source
 
-                # Video linkini yakalamak için bir Future nesnesi oluştur
-                video_link_future = asyncio.Future()
-
-                # Ağ isteklerini dinle
-                async def handle_response(response):
-                    # Video uzantılarını veya source2.php gibi video bilgisi veren URL'leri ara
-                    if (re.search(r'\.(m3u8|mp4|ts)(\?|$)', response.url, re.IGNORECASE) or
-                        "source2.php?v=" in response.url):
-                        
-                        try:
-                            # Yanıtın metin içeriğini al
-                            response_text = await response.text()
-                            # Eğer yanıt bir JSON ise ve "file" anahtarı içeriyorsa
-                            if response.headers.get("content-type") and "application/json" in response.headers["content-type"]:
-                                try:
-                                    json_data = json.loads(response_text)
-                                    if "file" in json_data:
-                                        m3u_link = json_data["file"].replace("\\", "")
-                                        if not video_link_future.done():
-                                            video_link_future.set_result(m3u_link)
-                                            logger.info(f"ContentX: Ağ isteğinden video linki yakalandı (JSON): {m3u_link}")
-                                except json.JSONDecodeError:
-                                    pass # JSON değilse veya format hatalıysa devam et
-                            
-                            # Eğer yanıt doğrudan m3u8 veya mp4 linki ise
-                            elif re.search(r'\.(m3u8|mp4|ts)(\?|$)', response.url, re.IGNORECASE):
-                                if not video_link_future.done():
-                                    video_link_future.set_result(response.url)
-                                    logger.info(f"ContentX: Doğrudan video URL'si yakalandı: {response.url}")
-
-                        except Exception as e:
-                            logger.warning(f"ContentX: Ağ yanıtını işlerken hata: {e}")
-
-                page.on("response", handle_response)
-
-                logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
-                # Sayfanın tüm kaynakları yüklenene kadar bekle
-                await page.goto(url, timeout=180000, wait_until="networkidle", referer=referer) # Timeout 180 saniyeye çıkarıldı
-
-                # Video linkinin bulunmasını bekle (veya belirli bir süre sonra zaman aşımına uğra)
-                try:
-                    # Maksimum 60 saniye boyunca video linkinin bulunmasını bekle
-                    final_video_link = await asyncio.wait_for(video_link_future, timeout=60)
-                    logger.info(f"ContentX: Son video linki başarıyla alındı: {final_video_link}")
-                    linkler.append({"kaynak": "ContentX (Network)", "isim": "ContentX Video", "url": final_video_link, "tur": "m3u8"})
+                vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
+                if vid_extract_match:
+                    m3u_link = vid_extract_match.group(1).replace("\\", "")
+                    logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
+                    linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
                     if callback:
                         await callback(linkler[-1])
-                    return {"linkler": linkler, "altyazilar": altyazilar} # Link bulundu, buradan dön
-                except asyncio.TimeoutError:
-                    logger.warning("ContentX: Belirtilen süre içinde video linki ağ isteklerinden yakalanamadı.")
-                    # Eğer ağdan yakalanamazsa, boş listelerle dön
-                    return {"linkler": linkler, "altyazilar": altyazilar}
-                
-            except Exception as e:
-                logger.error(f"ContentX çıkarma işlemi sırasında bir hata oluştu: {e}", exc_info=True)
-                if browser:
-                    await browser.close()
-                return {"linkler": linkler, "altyazilar": altyazilar}
-            finally:
-                if browser:
-                    await browser.close()
+                else:
+                    logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
+            else:
+                logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
+
+            driver.quit()
+            return {"linkler": linkler, "altyazilar": altyazilar}
+
+        except WebDriverException as e:
+            logger.error(f"ContentX Selenium WebDriver hatası: {e}", exc_info=True)
+            if driver:
+                driver.quit()
+            return {"linkler": linkler, "altyazilar": altyazilar}
+        except Exception as e:
+            logger.error(f"ContentX çıkarma işlemi sırasında genel hata: {e}", exc_info=True)
+            if driver:
+                driver.quit()
+            return {"linkler": linkler, "altyazilar": altyazilar}
 
 class DiziPalOrijinal:
     main_url = "https://dizipal935.com"
@@ -149,16 +157,13 @@ class DiziPalOrijinal:
         HEADERS['Referer'] = self.main_url + "/"
 
     async def init_session(self):
-        if hasattr(self, '_session_initialized') and self._session_initialized:
-            return
-            
-        logger.info("Oturum başlatılıyor: çerezler, cKey ve cValue alınıyor")
+        # Ana sayfa için hala Playwright kullanıyoruz
         async with async_playwright() as p:
             browser = None
             try:
                 browser_options = {'headless': True}
-                if PROXY:
-                    browser_options['proxy'] = PROXY
+                if PROXY_SERVER: # Playwright için proxy ayarı
+                    browser_options['proxy'] = {"server": f"socks5://{PROXY_SERVER}"}
                     
                 browser = await p.firefox.launch(**browser_options)
                 context = await browser.new_context(user_agent=HEADERS["User-Agent"])
@@ -194,12 +199,14 @@ class DiziPalOrijinal:
     async def load_links(self, data, is_casting, subtitle_callback, callback):
         await self.init_session()
         
+        # Bu kısım hala Playwright kullanıyor, çünkü ana sayfa oturumu burada başlatılıyor.
+        # Sadece ContentX extractor'ını Selenium'a taşıdık.
         async with async_playwright() as p:
             browser = None
             try:
                 browser_options = {'headless': True}
-                if PROXY:
-                    browser_options['proxy'] = PROXY
+                if PROXY_SERVER:
+                    browser_options['proxy'] = {"server": f"socks5://{PROXY_SERVER}"}
                 browser = await p.firefox.launch(**browser_options)
                 context = await browser.new_context(user_agent=HEADERS["User-Agent"])
                 await stealth_async(context)
@@ -231,6 +238,7 @@ class DiziPalOrijinal:
                 await browser.close()
 
                 for extractor in self.extractors:
+                    # ContentX artık Selenium kullanıyor
                     result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
                     if result and result.get("linkler"):
                         return True
