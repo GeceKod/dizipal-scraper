@@ -35,7 +35,7 @@ def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
         ciphertext = base64.b64decode(ciphertext_base64)
         key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
-        plaintext = cipher.decrypt(cipher.decrypt(ciphertext))
+        plaintext = cipher.decrypt(ciphertext)
         padding_len = plaintext[-1]
         plaintext = plaintext[:-padding_len]
         result = plaintext.decode('utf-8')
@@ -70,23 +70,17 @@ class ContentX(ExtractorApi):
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
                 await page.goto(url, timeout=90000, wait_until="domcontentloaded", referer=referer)
 
-                # ####################################################################
-                # ## AKILLI BEKLEME: Cloudflare testinin geçildiğinin kanıtı olan
-                # ## 'window.openPlayer' script'i sayfada görünene kadar bekle.
-                # ####################################################################
                 try:
                     logger.info("iFrame içindeki Cloudflare koruması bekleniyor...")
-                    # Sayfada 'window.openPlayer' metnini içeren bir <script> etiketi görünene kadar 60 saniye bekle.
                     await page.wait_for_selector("script:has-text('window.openPlayer')", timeout=60000)
                     logger.info("Cloudflare koruması başarıyla geçildi, 'window.openPlayer' script'i bulundu.")
                 except Exception:
                     logger.error("Bekleme süresi doldu, 'window.openPlayer' script'i bulunamadı. Sayfa Cloudflare'de takılmış olabilir.")
-                    await page.screenshot(path='cloudflare_error.png') # Sorun olursa kanıt için ekran görüntüsü al
+                    await page.screenshot(path='cloudflare_error.png')
                     await browser.close()
                     return {"linkler": [], "altyazilar": []}
 
                 i_source = await page.content()
-                
                 linkler = []
                 altyazilar = []
 
@@ -156,9 +150,12 @@ class DiziPalOrijinal:
                 logger.info(f"Ana sayfa ({self.main_url}) açılıyor...")
                 await page.goto(self.main_url, timeout=90000, wait_until="domcontentloaded")
 
-                logger.info("Ana sayfadaki bot korumasının çözülmesi için bekleniyor...")
-                # cKey'in bulunduğu input'u görene kadar bekle
-                await page.wait_for_selector("input[name=cKey]", timeout=60000)
+                # ####################################################################
+                # ## DÜZELTME: 'GİZLİ ELEMAN' hatasını çözmek için 'akıllı bekleme' yerine
+                # ## daha önce başarılı olan 'sabit süreli bekleme' yöntemine dönüldü.
+                # ####################################################################
+                logger.info("Ana sayfadaki bot korumasının çözülmesi için 15 saniye bekleniyor...")
+                await page.wait_for_timeout(15000)
 
                 page_content = await page.content()
                 soup = BeautifulSoup(page_content, 'html.parser')
@@ -168,13 +165,14 @@ class DiziPalOrijinal:
                 self.c_value = soup.select_one("input[name=cValue]")['value'] if soup.select_one("input[name=cValue]") else None
                 
                 if not self.c_key or not self.c_value:
+                    print("\n" + "="*80 + "\nHATA DEBUG: ANA SAYFA HTML İÇERİĞİ\n" + "-"*80 + f"\n{page_content}\n" + "="*80 + "\n")
                     raise ValueError("cKey veya cValue alınamadı.")
                 
                 logger.info(f"Oturum bilgileri başarıyla alındı.")
                 self._session_initialized = True
                 await browser.close()
             except Exception as e:
-                logger.error(f"Oturum başlatma başarısız: {e}", exc_info=False)
+                logger.error(f"Oturum başlatma başarısız: {e}", exc_info=True)
                 if browser:
                     await browser.close()
                 raise
