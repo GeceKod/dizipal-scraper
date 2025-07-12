@@ -81,15 +81,16 @@ class ContentX(ExtractorApi):
                     return {"linkler": [], "altyazilar": []}
 
                 i_source = await page.content()
-                # DEĞİŞİKLİK: iframe içeriğini loglama
-                logger.info(f"ContentX: Iframe içeriği (i_source) - İlk 500 karakter: {i_source[:500]}...")
+                # DEĞİŞİKLİK: iframe içeriğini daha fazla loglama
+                logger.info(f"ContentX: Iframe içeriği (i_source) - İlk 1000 karakter: {i_source[:1000]}...")
                 # Tam içeriği görmek isterseniz aşağıdaki satırın yorumunu kaldırın (Çok uzun olabilir!)
                 # logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
 
                 linkler = []
                 altyazilar = []
 
-                open_player_match = re.search(r"window\.openPlayer\('([^']+)'\)", i_source, re.IGNORECASE)
+                # DEĞİŞİKLİK: Düzenli ifadeyi tek veya çift tırnak için esnekleştirme
+                open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
                 
                 if open_player_match:
                     i_extract_val = open_player_match.group(1)
@@ -250,11 +251,9 @@ class DiziPalOrijinal:
                 logger.info(f"Bulunan Video Linkleri: {json.dumps(video_data['linkler'], indent=2, ensure_ascii=False)}")
                 logger.info(f"Bulunan Altyazılar: {json.dumps(video_data['altyazilar'], indent=2, ensure_ascii=False)}")
             else:
-                logger.error("\n--- TEST BAŞARISIZ ---")
-                logger.error("Video linki veya altyazı bulunamadı.")
+                logger.error("\n--- TEST BAŞARISIZ ---\nVideo linki veya altyazı bulunamadı.")
         except Exception as e:
-            logger.error(f"\n--- TEST BAŞARISIZ ---")
-            logger.error(f"Ana programda kritik hata: {e}", exc_info=True)
+            logger.error(f"\n--- TEST BAŞARISIZ ---\nAna programda kritik hata: {e}", exc_info=True)
 
 # Ana çalıştırma
 if __name__ == "__main__":
