@@ -24,7 +24,7 @@ PROXY = {
 # Başlık ayarları
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "User-Agent": "Mozilla/50 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
 }
 
 # Şifre çözme fonksiyonu
@@ -69,59 +69,28 @@ class ContentX(ExtractorApi):
                 await stealth_async(page_context)
                 page = await page_context.new_page()
 
-                # Console loglarını yakalamak için listener ekle
+                # Console loglarını yakalamak için listener ekle (debug amaçlı)
                 page.on("console", lambda msg: logger.info(f"Tarayıcı Konsolu ({msg.type}): {msg.text}"))
                 page.on("pageerror", lambda err: logger.error(f"Tarayıcı Sayfa Hatası: {err}"))
                 page.on("requestfailed", lambda request: logger.warning(f"Tarayıcı İstek Hatası: {request.url} - {request.failure().error_text}"))
 
-
-                # window.openPlayer çağrısını doğrudan yakalamak için init script ekle
-                await page.add_init_script("""
-                    (function() {
-                        const originalOpenPlayer = window.openPlayer;
-                        window.openPlayer = function(param) {
-                            window.__playerParamValue = param; // Parametreyi bir global değişkende sakla
-                            console.log('openPlayer çağrıldı, parametre:', param); // Konsola logla
-                            if (originalOpenPlayer) {
-                                originalOpenPlayer.apply(this, arguments); // Orijinal fonksiyonu çağır (varsa)
-                            }
-                        };
-                        // openPlayer fonksiyonu yoksa veya geç tanımlanıyorsa, bir placeholder oluştur
-                        if (typeof originalOpenPlayer === 'undefined') {
-                            console.log('openPlayer henüz tanımlı değil, placeholder oluşturuluyor.');
-                            window.openPlayer = function(param) {
-                                window.__playerParamValue = param;
-                                console.log('Placeholder openPlayer çağrıldı, parametre:', param);
-                            };
-                        }
-                    })();
-                """)
-
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
-                # Sayfa yükleme zaman aşımını artır ve networkidle'ı kullan
-                await page.goto(url, timeout=180000, wait_until="networkidle", referer=referer) # Timeout 180 saniyeye çıkarıldı
+                # DEĞİŞİKLİK: wait_until="domcontentloaded" kullanıldı
+                await page.goto(url, timeout=90000, wait_until="domcontentloaded", referer=referer) 
 
-                # Sayfayı aşağı kaydırarak dinamik yüklemeyi tetiklemeyi dene
-                logger.info("Sayfayı aşağı kaydırılıyor...")
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2) # Kaydırma sonrası kısa bir bekleme
-
-                try:
-                    logger.info("iFrame içindeki Cloudflare koruması bekleniyor ve 'window.__playerParamValue' bekleniyor...")
-                    # 'window.__playerParamValue' değişkeninin tanımlanmasını bekle
-                    await page.wait_for_function("() => window.__playerParamValue !== undefined", timeout=180000) # Timeout 180 saniyeye çıkarıldı
-                    logger.info("Cloudflare koruması başarıyla geçildi ve 'window.openPlayer' çağrısı yakalandı.")
-                except Exception as e:
-                    logger.error(f"Bekleme süresi doldu, 'window.__playerParamValue' bulunamadı. Sayfa Cloudflare'de takılmış olabilir veya openPlayer çağrılmamış olabilir. Hata: {e}")
-                    await page.screenshot(path='cloudflare_error_iframe.png') # Hata durumunda ekran görüntüsü al
-                    await browser.close()
-                    return {"linkler": linkler, "altyazilar": altyazilar}
-
-                # Yakalanan parametreyi al
-                i_extract_val = await page.evaluate("window.__playerParamValue")
+                # Sayfanın tamamen yüklenmesi için kısa bir bekleme ekleyebiliriz (isteğe bağlı)
+                # await asyncio.sleep(5) 
                 
-                if i_extract_val:
-                    logger.info(f"ContentX: Yakalanan openPlayer parametresi: {i_extract_val}")
+                # DEĞİŞİKLİK: Doğrudan page.content() alıp regex ile arama yapıyoruz
+                i_source = await page.content()
+                logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source}")
+                
+                # Kotlin kodundaki regex'e benzer şekilde tek veya çift tırnak için esnek regex kullanıyoruz.
+                open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
+                
+                if open_player_match:
+                    i_extract_val = open_player_match.group(1)
+                    logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
                     parsed_url = urlparse(url)
                     base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
                     
@@ -141,7 +110,7 @@ class ContentX(ExtractorApi):
                     else:
                         logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
                 else:
-                    logger.warning(f"ContentX: 'window.openPlayer' parametresi yakalanamadı.")
+                    logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
 
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
