@@ -28,12 +28,12 @@ HEADERS = {
 }
 
 # Şifre çözme fonksiyonu
-def decrypt(passphraze, salt_hex, iv_hex, ciphertext_base64):
+def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
     try:
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
-        key = PBKDF2(passphraze, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
+        key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
         padding_len = plaintext[-1]
@@ -69,6 +69,40 @@ class ContentX(ExtractorApi):
                 await stealth_async(page_context)
                 page = await page_context.new_page()
 
+                # Video linkini yakalamak için bir Future nesnesi oluştur
+                video_link_future = asyncio.Future()
+
+                # Ağ isteklerini dinle
+                async def handle_response(response):
+                    # source2.php isteğini veya doğrudan video linkini içeren bir yanıtı ara
+                    if "source2.php?v=" in response.url or ".m3u8" in response.url or ".mp4" in response.url:
+                        try:
+                            # Yanıtın metin içeriğini al
+                            response_text = await response.text()
+                            # Eğer yanıt bir JSON ise ve "file" anahtarı içeriyorsa
+                            if response.headers.get("content-type") and "application/json" in response.headers["content-type"]:
+                                try:
+                                    json_data = json.loads(response_text)
+                                    if "file" in json_data:
+                                        # m3u8 linkini çek ve Future'ı tamamla
+                                        m3u_link = json_data["file"].replace("\\", "")
+                                        if not video_link_future.done():
+                                            video_link_future.set_result(m3u_link)
+                                            logger.info(f"ContentX: Ağ isteğinden video linki yakalandı: {m3u_link}")
+                                except json.JSONDecodeError:
+                                    pass # JSON değilse devam et
+                            
+                            # Eğer yanıt doğrudan m3u8 veya mp4 linki ise
+                            elif ".m3u8" in response.url or ".mp4" in response.url:
+                                if not video_link_future.done():
+                                    video_link_future.set_result(response.url)
+                                    logger.info(f"ContentX: Doğrudan video URL'si yakalandı: {response.url}")
+
+                        except Exception as e:
+                            logger.warning(f"ContentX: Ağ yanıtını işlerken hata: {e}")
+
+                page.on("response", handle_response)
+
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
                 await page.goto(url, timeout=90000, wait_until="networkidle", referer=referer)
 
@@ -82,38 +116,47 @@ class ContentX(ExtractorApi):
                     await browser.close()
                     return {"linkler": linkler, "altyazilar": altyazilar}
 
-                i_source_full = await page.content()
-                logger.info(f"ContentX: Iframe içeriği (i_source) - Tamamı:\n{i_source_full}")
-                
-                # DEĞİŞİKLİK: page.evaluate yerine doğrudan i_source_full üzerinde regex arama
-                # Kotlin kodundaki regex'e benzer şekilde tek tırnaklı parametre arıyoruz.
-                # Ayrıca hem tek hem çift tırnak için esnek bir regex kullanıyoruz.
-                open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source_full, re.IGNORECASE)
-                
-                if open_player_match:
-                    i_extract_val = open_player_match.group(1)
-                    logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
-                    parsed_url = urlparse(url)
-                    base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                # Video linkinin bulunmasını bekle (veya belirli bir süre sonra zaman aşımına uğra)
+                try:
+                    # Maksimum 30 saniye boyunca video linkinin bulunmasını bekle
+                    final_video_link = await asyncio.wait_for(video_link_future, timeout=30)
+                    logger.info(f"ContentX: Son video linki başarıyla alındı: {final_video_link}")
+                    linkler.append({"kaynak": "ContentX (Network)", "isim": "ContentX Video", "url": final_video_link, "tur": "m3u8"})
+                    if callback:
+                        await callback(linkler[-1])
+                    return {"linkler": linkler, "altyazilar": altyazilar} # Link bulundu, buradan dön
+                except asyncio.TimeoutError:
+                    logger.warning("ContentX: Belirtilen süre içinde video linki ağ isteklerinden yakalanamadı.")
+                    # Eğer ağdan yakalanamazsa, eski regex yöntemini fallback olarak dene
+                    i_source_full = await page.content()
+                    logger.info(f"ContentX: Ağdan bulunamadı, HTML içeriği üzerinde regex denemesi yapılıyor...")
+                    # Regex araması, Kotlin kodundaki gibi tek veya çift tırnak için esnek
+                    open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source_full, re.IGNORECASE)
                     
-                    source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                    logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
+                    if open_player_match:
+                        i_extract_val = open_player_match.group(1)
+                        logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
+                        parsed_url = urlparse(url)
+                        base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                        
+                        source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
+                        logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
 
-                    await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
-                    vid_source = await page.content()
+                        await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
+                        vid_source = await page.content()
 
-                    vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
-                    if vid_extract_match:
-                        m3u_link = vid_extract_match.group(1).replace("\\", "")
-                        logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
-                        linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                        if callback:
-                            await callback(linkler[-1])
+                        vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
+                        if vid_extract_match:
+                            m3u_link = vid_extract_match.group(1).replace("\\", "")
+                            logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
+                            linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
+                            if callback:
+                                await callback(linkler[-1])
+                        else:
+                            logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
                     else:
-                        logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
-                else:
-                    logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
-
+                        logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
+                
                 await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
 
@@ -210,8 +253,8 @@ class DiziPalOrijinal:
                     raise ValueError("Şifreli JSON verisi 'div[data-rm-k]' içinde bulunamadı.")
 
                 obj = json.loads(hidden_json_tag.text) 
-                passphraze = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
-                decrypted_content = decrypt(passphraze, obj['salt'], obj['iv'], obj['ciphertext'])
+                passphrase = "3hPn4uCjTVtfYWcjIcoJQ4cL1WWk1qxXI39egLYOmNv6IblA7eKJz68uU3eLzux1biZLCms0quEjTYniGv5z1JcKbNIsDQFSeIZOBZJz4is6pD7UyWDggWWzTLBQbHcQFpBQdClnuQaMNUHtLHTpzCvZy33p6I7wFBvL4fnXBYH84aUIyWGTRvM2G5cfoNf4705tO2kv"
+                decrypted_content = decrypt(passphrase, obj['salt'], obj['iv'], obj['ciphertext'])
                 iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
                 logger.info(f"Çözülen iframe URL: {iframe_url}")
 
