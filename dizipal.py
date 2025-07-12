@@ -15,6 +15,9 @@ from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
+# Playwright için gerekli kütüphaneler (init_session'da hala kullanılıyor)
+from playwright.async_api import async_playwright # Bu satırın varlığı ve doğruluğu önemli!
+
 # Loglama ayarları
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -85,9 +88,7 @@ class ContentX(ExtractorApi):
             driver.get(url)
 
             # Cloudflare veya dinamik içeriğin yüklenmesini bekle
-            # JavaScript hataları olsa bile sayfa kaynağını almayı deneyeceğiz
             try:
-                # Sayfadaki tüm scriptlerin yüklenmesini beklemek için daha genel bir bekleme
                 WebDriverWait(driver, 60).until(
                     lambda d: d.execute_script("return document.readyState") == "complete"
                 )
@@ -158,6 +159,8 @@ class DiziPalOrijinal:
 
     async def init_session(self):
         # Ana sayfa için hala Playwright kullanıyoruz
+        # async_playwright'ın import edildiğinden emin olmalıyız.
+        # En üstte import edilmiş durumda.
         async with async_playwright() as p:
             browser = None
             try:
@@ -201,7 +204,7 @@ class DiziPalOrijinal:
         
         # Bu kısım hala Playwright kullanıyor, çünkü ana sayfa oturumu burada başlatılıyor.
         # Sadece ContentX extractor'ını Selenium'a taşıdık.
-        async with async_playwright() as p:
+        async with async_playwright() as p: # Bu blok içinde async_playwright kullanılıyor
             browser = None
             try:
                 browser_options = {'headless': True}
