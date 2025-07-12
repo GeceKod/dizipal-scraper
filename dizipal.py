@@ -28,12 +28,12 @@ HEADERS = {
 }
 
 # Şifre çözme fonksiyonu
-def decrypt(passphrase, salt_hex, iv_hex, ciphertext_base64):
+def decrypt(passphraze, salt_hex, iv_hex, ciphertext_base64):
     try:
         salt = bytes.fromhex(salt_hex)
         iv = bytes.fromhex(iv_hex)
         ciphertext = base64.b64decode(ciphertext_base64)
-        key = PBKDF2(passphrase, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
+        key = PBKDF2(passphraze, salt, dkLen=32, count=999, hmac_hash_module=SHA512)
         cipher = AES.new(key, AES.MODE_CBC, iv)
         plaintext = cipher.decrypt(ciphertext)
         padding_len = plaintext[-1]
@@ -74,72 +74,67 @@ class ContentX(ExtractorApi):
                 page.on("pageerror", lambda err: logger.error(f"Tarayıcı Sayfa Hatası: {err}"))
                 page.on("requestfailed", lambda request: logger.warning(f"Tarayıcı İstek Hatası: {request.url} - {request.failure().error_text}"))
 
-                # DEĞİŞİKLİK: iframe'in ham yanıtını yakalamak için
-                raw_html_response = []
-                def handle_response(response):
-                    if response.url == url and response.status == 200:
-                        raw_html_response.append(response)
+                # Video linkini yakalamak için bir Future nesnesi oluştur
+                video_link_future = asyncio.Future()
 
-                page.on('response', handle_response)
+                # Ağ isteklerini dinle
+                async def handle_response(response):
+                    # Video uzantılarını veya source2.php gibi video bilgisi veren URL'leri ara
+                    if (re.search(r'\.(m3u8|mp4|ts)(\?|$)', response.url, re.IGNORECASE) or
+                        "source2.php?v=" in response.url):
+                        
+                        try:
+                            # Yanıtın metin içeriğini al
+                            response_text = await response.text()
+                            # Eğer yanıt bir JSON ise ve "file" anahtarı içeriyorsa
+                            if response.headers.get("content-type") and "application/json" in response.headers["content-type"]:
+                                try:
+                                    json_data = json.loads(response_text)
+                                    if "file" in json_data:
+                                        m3u_link = json_data["file"].replace("\\", "")
+                                        if not video_link_future.done():
+                                            video_link_future.set_result(m3u_link)
+                                            logger.info(f"ContentX: Ağ isteğinden video linki yakalandı (JSON): {m3u_link}")
+                                except json.JSONDecodeError:
+                                    pass # JSON değilse veya format hatalıysa devam et
+                            
+                            # Eğer yanıt doğrudan m3u8 veya mp4 linki ise
+                            elif re.search(r'\.(m3u8|mp4|ts)(\?|$)', response.url, re.IGNORECASE):
+                                if not video_link_future.done():
+                                    video_link_future.set_result(response.url)
+                                    logger.info(f"ContentX: Doğrudan video URL'si yakalandı: {response.url}")
+
+                        except Exception as e:
+                            logger.warning(f"ContentX: Ağ yanıtını işlerken hata: {e}")
+
+                page.on("response", handle_response)
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
-                # "commit" sadece navigation'ın başladığını garanti eder, daha hızlı döner.
-                # Daha sonra response'un gelmesini bekleyeceğiz.
-                await page.goto(url, timeout=90000, wait_until="commit", referer=referer) 
+                # Sayfanın tüm kaynakları yüklenene kadar bekle
+                await page.goto(url, timeout=180000, wait_until="networkidle", referer=referer) # Timeout 180 saniyeye çıkarıldı
+
+                # Video linkinin bulunmasını bekle (veya belirli bir süre sonra zaman aşımına uğra)
+                try:
+                    # Maksimum 60 saniye boyunca video linkinin bulunmasını bekle
+                    final_video_link = await asyncio.wait_for(video_link_future, timeout=60)
+                    logger.info(f"ContentX: Son video linki başarıyla alındı: {final_video_link}")
+                    linkler.append({"kaynak": "ContentX (Network)", "isim": "ContentX Video", "url": final_video_link, "tur": "m3u8"})
+                    if callback:
+                        await callback(linkler[-1])
+                    return {"linkler": linkler, "altyazilar": altyazilar} # Link bulundu, buradan dön
+                except asyncio.TimeoutError:
+                    logger.warning("ContentX: Belirtilen süre içinde video linki ağ isteklerinden yakalanamadı.")
+                    # Eğer ağdan yakalanamazsa, boş listelerle dön
+                    return {"linkler": linkler, "altyazilar": altyazilar}
                 
-                # Yanıtın gelmesini bekle
-                if not raw_html_response:
-                    # Alternatif olarak page.wait_for_response kullanabiliriz
-                    try:
-                        response = await page.wait_for_response(lambda r: r.url == url and r.status == 200, timeout=60000)
-                        raw_html_response.append(response)
-                    except Exception as e:
-                        logger.error(f"ContentX: Iframe URL'si için yanıt alınamadı: {e}")
-                        await browser.close()
-                        return {"linkler": linkler, "altyazilar": altyazilar}
-
-                if raw_html_response:
-                    i_source_bytes = await raw_html_response[0].body()
-                    i_source = i_source_bytes.decode('utf-8') # UTF-8 olarak çöz
-                    logger.info(f"ContentX: Ham iframe yanıtı (i_source):\n{i_source}")
-
-                    # Kotlin kodundaki regex'e benzer şekilde tek veya çift tırnak için esnek regex kullanıyoruz.
-                    open_player_match = re.search(r"window\.openPlayer\(['\"]([^'\"]+)['\"]\)", i_source, re.IGNORECASE)
-                    
-                    if open_player_match:
-                        i_extract_val = open_player_match.group(1)
-                        logger.info(f"ContentX: Regex ile alınan parametre: {i_extract_val}")
-                        parsed_url = urlparse(url)
-                        base_iframe_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-                        
-                        source_url = f"{base_iframe_url}/source2.php?v={i_extract_val}"
-                        logger.info(f"ContentX: source2.php adresine istek gönderiliyor: {source_url}")
-
-                        await page.goto(source_url, timeout=90000, wait_until="networkidle", referer=url)
-                        vid_source = await page.content()
-
-                        vid_extract_match = re.search(r'"file":"((?:\\"|[^"])+)"', vid_source, re.IGNORECASE)
-                        if vid_extract_match:
-                            m3u_link = vid_extract_match.group(1).replace("\\", "")
-                            logger.info(f"ContentX: BAŞARILI! Video linki bulundu: {m3u_link}")
-                            linkler.append({"kaynak": "ContentX (Source2)", "isim": "ContentX Video", "url": m3u_link, "tur": "m3u8"})
-                            if callback:
-                                await callback(linkler[-1])
-                        else:
-                            logger.warning(f"ContentX: source2.php cevabında video linki bulunamadı.")
-                    else:
-                        logger.warning(f"ContentX: 'window.openPlayer' parametresi regex ile bulunamadı.")
-                else:
-                    logger.error("ContentX: Iframe URL'si için ham yanıt alınamadı.")
-
-                await browser.close()
-                return {"linkler": linkler, "altyazilar": altyazilar}
-
             except Exception as e:
                 logger.error(f"ContentX çıkarma işlemi sırasında bir hata oluştu: {e}", exc_info=True)
                 if browser:
                     await browser.close()
                 return {"linkler": linkler, "altyazilar": altyazilar}
+            finally:
+                if browser:
+                    await browser.close()
 
 class DiziPalOrijinal:
     main_url = "https://dizipal935.com"
