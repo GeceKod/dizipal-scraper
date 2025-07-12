@@ -69,6 +69,13 @@ class ContentX(ExtractorApi):
 
                 logger.info(f"ContentX: Iframe URL'sine gidiliyor: {url}")
                 await page.goto(url, timeout=90000, wait_until="domcontentloaded", referer=referer)
+
+                # ####################################################################
+                # ## YENİ EKLENEN DÜZELTME: iFrame'deki Cloudflare koruması için bekleme
+                # ####################################################################
+                logger.info("iFrame içindeki Cloudflare korumasının çözülmesi için 15 saniye bekleniyor...")
+                await page.wait_for_timeout(15000)
+
                 i_source = await page.content()
                 
                 linkler = []
@@ -163,10 +170,6 @@ class DiziPalOrijinal:
                     await browser.close()
                 raise
 
-    # ####################################################################
-    # ## 'div[data-rm-k]' HATASINI GİDERMEK İÇİN GÜNCELLENMİŞ FONKSİYON
-    # ## 'requests' yerine tekrar 'playwright' kullanılıyor.
-    # ####################################################################
     async def load_links(self, data, is_casting, subtitle_callback, callback):
         await self.init_session()
         
@@ -180,7 +183,6 @@ class DiziPalOrijinal:
                 context = await browser.new_context(user_agent=HEADERS["User-Agent"])
                 await stealth_async(context)
 
-                # Oturumun devam etmesi için ana sayfadan aldığımız çerezleri ekliyoruz
                 if self.session_cookies:
                     await context.add_cookies([{"name": name, "value": value, "url": self.main_url} for name, value in self.session_cookies.items()])
                 
@@ -189,7 +191,6 @@ class DiziPalOrijinal:
                 logger.info(f"Link sayfasına erişiliyor: {data}")
                 await page.goto(data, timeout=90000, wait_until="load")
                 
-                # JavaScript'in çalışmasına izin vermek için kısa bir bekleme
                 await page.wait_for_timeout(3000)
 
                 page_content = await page.content()
@@ -207,9 +208,7 @@ class DiziPalOrijinal:
                 iframe_url = urljoin(self.main_url, decrypted_content) if not decrypted_content.startswith("http") else decrypted_content
                 logger.info(f"Çözülen iframe URL: {iframe_url}")
 
-                # Browser context'ini extractor'a devrederek yeniden başlatmayı önleyebiliriz
-                # ancak şimdilik basit tutmak adına her extractor kendi işini yapsın.
-                await browser.close() # Bu browser'ı kapatıp extractor'da yenisini açalım.
+                await browser.close()
 
                 for extractor in self.extractors:
                     result = await extractor.get_url(iframe_url, referer=data, subtitle_callback=subtitle_callback, callback=callback)
