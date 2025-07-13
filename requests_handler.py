@@ -21,8 +21,8 @@ class RequestHandler:
         # Proxy ayarlarını buraya ekliyoruz
         # Kullanıcının belirttiği adres: socks5://149.86.137.246:10820
         self.session.proxies = {
-            'http': 'socks5://149.86.137.246:10820',
-            'https': 'socks5://149.86.137.246:10820'
+            'http': 'socks5://185.87.121.35:8975',
+            'https': 'socks5://185.87.121.35:8975'
         }
 
     def _bypass_cloudflare(self, url):
