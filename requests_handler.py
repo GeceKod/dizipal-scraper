@@ -18,6 +18,13 @@ class RequestHandler:
         # Kotlin kodunda belirtilen User-Agent'ı kullanıyoruz
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
 
+        # Proxy ayarlarını buraya ekliyoruz
+        # Kullanıcının belirttiği adres: socks5://149.86.137.246:10820
+        self.session.proxies = {
+            'http': 'socks5://149.86.137.246:10820',
+            'https': 'socks5://149.86.137.246:10820'
+        }
+
     def _bypass_cloudflare(self, url):
         print(f"Cloudflare aşıma girişimi: {url} (Selenium ile)...")
         options = ChromeOptions()
@@ -33,6 +40,10 @@ class RequestHandler:
         # Otomasyon uzantılarından kaçınmak için deneysel seçenekler
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
+        
+        # Selenium WebDriver'ın da proxy kullanması için bu kısım önemlidir
+        # Chromium tabanlı tarayıcılarda --proxy-server argümanı kullanılır
+        options.add_argument(f'--proxy-server=socks5://149.86.137.246:10820')
 
 
         driver = None # Hata durumunda driver'ı kapatabilmek için
