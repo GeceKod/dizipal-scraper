@@ -31,36 +31,24 @@ class DizipalScraper:
         }
 
         # Cloudflare ve diğer korumaları otomatik olarak handle etmesi için
-        resp = request_handler.get(self.main_url, headers=headers, timeout=120, handle_protection=True)
+        resp = request_handler.get(self.main_url, headers=headers, handle_protection=True)
         if not resp:
             print("Dizipal ana sayfası alınamadı.")
             return False
 
-        # Bu kısım Kotlin DiziPalOrijinal.kt'den cKey ve cValue çekme mantığını takip eder.
-        # HTML'de doğrudan cKey ve cValue'yu içeren input alanları arayalım.
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        c_key_input = soup.select_one("input[name=cKey]")
-        c_value_input = soup.select_one("input[name=cValue]")
+        # Kotlin DiziPalOrijinal.kt'den cKey ve cValue çekme mantığı
+        # Bu kısım HTML yapısına göre değişebilir, regex ile yakalamaya çalışıyoruz
+        match_ckey = re.search(r"var cKey = '(.*?)';", resp.text)
+        match_cvalue = re.search(r"var cValue = '(.*?)';", resp.text)
 
-        if c_key_input and c_value_input:
-            self.cKey = c_key_input.get('value')
-            self.cValue = c_value_input.get('value')
+        if match_ckey and match_cvalue:
+            self.cKey = match_ckey.group(1)
+            self.cValue = match_cvalue.group(1)
             print(f"cKey: {self.cKey}, cValue: {self.cValue}")
             return True
         else:
-            # Eğer input'lar bulunamazsa, eski regex tabanlı yöntemi deneyelim.
-            # Bazı siteler JavaScript ile bu değerleri dinamik olarak atayabilir.
-            match_ckey = re.search(r"var cKey = '(.*?)';", resp.text)
-            match_cvalue = re.search(r"var cValue = '(.*?)';", resp.text)
-
-            if match_ckey and match_cvalue:
-                self.cKey = match_ckey.group(1)
-                self.cValue = match_cvalue.group(1)
-                print(f"cKey (regex): {self.cKey}, cValue (regex): {self.cValue}")
-                return True
-            else:
-                print("Dizipal oturumu başlatılamadı. cKey veya cValue bulunamadı.")
-                return False
+            print("Dizipal oturumu başlatılamadı. cKey veya cValue bulunamadı.")
+            return False
 
     # Kotlin'deki decrypt fonksiyonunun Python karşılığı
     def _decrypt_player_data(self, passphrase, salt_hex, iv_hex, ciphertext_base64):
@@ -173,31 +161,21 @@ class DizipalScraper:
         print(f"--- {request_name} ---")
         # DizipalOrijinal.kt'deki getPage fonksiyonuna benzer mantık
         page_url = f"{self.main_url}/index.php"
-        params = {} # Varsayılan olarak boş
+        params = {"s": ""} # Varsayılan olarak boş arama
 
         if request_name == "Yeni Eklenen Bölümler":
             params["s"] = "son-eklenen-bolumler"
-            # Dizipal API'si için POST verisi
-            post_data = {
-                "s": "son-eklenen-bolumler",
-                "cKey": self.cKey, # cKey'i POST verisine ekleyin
-                "cValue": self.cValue # cValue'u POST verisine ekleyin
-            }
-            # Eğer Dizipal bu verileri POST ile bekliyorsa
-            response = request_handler.post(f"{self.main_url}/bg/findseries", data=post_data, headers={"User-Agent": request_handler.user_agent, "Referer": f"{self.main_url}/"})
         elif request_name == "Yeni Eklenen Filmler":
             params["s"] = "son-eklenen-filmler"
-            # Filmler için de aynı POST mantığı uygulanabilir veya GET ile devam edilebilir
-            post_data = {
-                "s": "son-eklenen-filmler",
-                "cKey": self.cKey,
-                "cValue": self.cValue
-            }
-            response = request_handler.post(f"{self.main_url}/bg/findseries", data=post_data, headers={"User-Agent": request_handler.user_agent, "Referer": f"{self.main_url}/"})
-        else:
-            # Diğer kategoriler için GET isteği
-            response = request_handler.get(page_url, headers={"User-Agent": request_handler.user_agent, "Referer": f"{self.main_url}/"}, params=params, handle_protection=True)
+        # Diğer kategoriler buraya eklenebilir
 
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": request_handler.user_agent,
+            "Referer": f"{self.main_url}/",
+        }
+
+        response = request_handler.get(page_url, headers=headers, params=params, handle_protection=True)
         if not response:
             print(f"İçerik alınamadı: {request_name}")
             return []
@@ -217,32 +195,26 @@ class DizipalScraper:
         soup = BeautifulSoup(html_fragment, 'html.parser')
 
         home_results = []
-        if "Yeni Eklenen Bölümler" in request_name or "Yeni Eklenen Filmler" in request_name:
+        if "Yeni Eklenen Bölümler" in request_name:
             # Kotlin kodundaki seçici
-            links = soup.select("div.overflow-auto a") # Dizipal'ın güncel HTML yapısına göre
-            # Ek olarak dikey listeler için de bakabiliriz, eğer overflow-auto değiştiyse
-            if not links:
-                links = soup.select("div.prm-vertical-items a") # Alternatif seçici
+            links = soup.select("div.overflow-auto a")
         else:
-            # Genel film/dizi listeleri için seçici (daha geniş kapsamlı olabilir)
-            links = soup.select("div.prm-borderb a") 
+            # Genel film/dizi listeleri için seçici
+            links = soup.select("div.prm-borderb a") # Dizipal HTML yapısına göre ayarlanmalı
 
-        for link_tag in links:
-            href = link_tag.get('href')
-            title = link_tag.get_text(strip=True)
-            # Zaman damgasını (örn: "15 saat önce") ayıklayabiliriz
-            time_element = link_tag.find_next_sibling('span') # Bağlantıdan sonraki span
-            time_info = time_element.get_text(strip=True) if time_element else ""
-
-            if href:
-                # Bağlantı tam URL değilse ana URL ile birleştir
-                full_url = href if href.startswith('http') else self.main_url + href
-                home_results.append({'title': f"{title}{time_info}", 'url': full_url})
+        for link in links:
+            title = link.get_text(strip=True)
+            href = link.get('href')
+            if title and href:
+                # Absolute URL'ye dönüştür
+                if not href.startswith('http'):
+                    href = self.main_url + href
+                home_results.append({'title': title, 'url': href})
         
+        # Burada her bir bölüm için oynatıcı URL'sini bulma mantığını ekliyoruz
         processed_results = []
         for item in home_results:
             print(f"İşleniyor: {item['title']} - {item['url']}")
-            # Oynatıcı URL'sini alma
             player_url = await self.get_episode_player_url(item['url'])
             if player_url:
                 processed_results.append({'title': item['title'], 'url': player_url})
