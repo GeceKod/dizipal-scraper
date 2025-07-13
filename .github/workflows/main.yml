@@ -31,7 +31,7 @@ jobs:
         run: python main.py > m3u8_links.txt
 
       - name: m3u8 Linklerini Artifact Olarak Yükle
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: dizipal-m3u8-links
           path: m3u8_links.txt
