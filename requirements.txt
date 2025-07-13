@@ -1,10 +1,5 @@
-requests==2.32.3
-beautifulsoup4==4.12.3
-pycryptodome==3.20.0
-PySocks==1.7.1
-playwright==1.47.0
-playwright-stealth==1.0.6
-cloudscraper==1.2.71
-fake_useragent
+requests
+beautifulsoup4
 selenium
-undetected-chromedriver
+webdriver-manager
+cryptography  # AES şifre çözme için
