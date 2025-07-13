@@ -1,63 +1,37 @@
-name: DiziPal Kazıyıcı
+name: Dizipal M3U8 Scraper
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:  # Manuel çalıştırma için
+  schedule:
+    - cron: '0 0 * * *'  # Her gün saat 00:00'da çalıştır (UTC)
+  workflow_dispatch: # GitHub arayüzünden manuel çalıştırmaya izin verir
 
 jobs:
-  kazi:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write  # Depoya yazma izni
+  scrape:
+    runs-on: ubuntu-latest # Ubuntu i\u015Fletim sisteminde \u00E7al\u0131\u015Ft\u0131r
 
     steps:
-      - name: Kodu çek
-        uses: actions/checkout@v4
+      - name: Depoyu Çek
+        uses: actions/checkout@v3
+
+      - name: Python Kurulumu
+        uses: actions/setup-python@v4
         with:
-          fetch-depth: 0  # Tüm geçmişi çek
+          python-version: '3.x' # Python 3'un en yeni s\u00FCr\u00FCm\u00FCn\u00FC kullan
 
-      - name: Python'u kur
-        uses: actions/setup-python@v5
+      - name: Gerekli Chromium Bağımlılıklarını Kur
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
+
+      - name: Python Bağımlılıklarını Kur
+        run: pip install -r requirements.txt
+
+      - name: Scraper'ı Çalıştır
+        # Python scriptinin \u00E7\u0131kt\u0131s\u0131n\u0131 bir dosyaya y\u00F6nlendir
+        run: python main.py > m3u8_links.txt
+
+      - name: m3u8 Linklerini Artifact Olarak Yükle
+        uses: actions/upload-artifact@v3
         with:
-          python-version: '3.9'
-
-      - name: Bağımlılıkları yükle
-        run: |
-          python -m pip install --upgrade pip
-          pip cache purge  # Önbelleği temizle
-          pip install -r requirements.txt --no-cache-dir
-          playwright install --with-deps
-        env:
-          PYTHONUNBUFFERED: 1  # Gerçek zamanlı loglama için
-
-      - name: Yüklü kütüphaneleri kontrol et
-        run: |
-          pip list  # Yüklü kütüphaneleri logla
-
-      - name: Kazıyıcıyı çalıştır
-        run: |
-          python dizipal.py
-        env:
-          PYTHONUNBUFFERED: 1  # Gerçek zamanlı loglama için
-
-      - name: Debug dosyalarını artifact olarak yükle
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-files
-          path: |
-            iframe_debug_*.html
-            source2_debug.html
-            dublaj_source2_debug.html
-          if-no-files-found: ignore
-
-      - name: Sonuçları kaydet ve gönder
-        run: |
-          git config --global user.name 'GitHub Action'
-          git config --global user.email 'action@github.com'
-          git add .
-          git commit -m "Kazınan veriler güncellendi" || echo "Kaydedilecek değişiklik yok"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: dizipal-m3u8-links
+          path: m3u8_links.txt
