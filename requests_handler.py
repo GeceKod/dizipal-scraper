@@ -6,6 +6,10 @@ from selenium.webdriver.chrome.options import Options as ChromeOptions
 import time
 import re
 from urllib.parse import unquote # Çerezleri URL dekode etmek için
+# Selenium için bekleme mekanizmaları
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 
 class RequestHandler:
     def __init__(self):
@@ -22,20 +26,51 @@ class RequestHandler:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument(f"user-agent={self.user_agent}")
+        # Headless tarayıcı tespitinden kaçınma için ek argümanlar
+        options.add_argument("--window-size=1920,1080") # Çözünürlüğü ayarla
+        options.add_argument("--start-maximized") # Tam ekran başlat
+        options.add_argument("--disable-blink-features=AutomationControlled") # Bot tespitini engelle
+        # Otomasyon uzantılarından kaçınmak için deneysel seçenekler
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+
 
         driver = None # Hata durumunda driver'ı kapatabilmek için
         try:
             # ChromeDriver'ı otomatik yönet
             driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
-            driver.get(url)
-            # Cloudflare'ın JavaScript challenge'ını çözmesi için yeterli süre bekle
-            # Kotlin kodu "Just a moment..." yazısını bekler, biz de benzer bir gecikme kullanabiliriz
-            time.sleep(10) # Sayfanın yüklenmesi ve JS'nin çalışması için 10 saniye bekle
+            
+            # navigator.webdriver özelliğini gizleyerek bot tespitinden kaçınma
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": """
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => false
+                    });
+                """
+            })
 
-            # Çerezleri al
-            cookies = driver.get_cookies()
-            for cookie in cookies:
-                self.cf_cookies[cookie['name']] = cookie['value']
+            driver.get(url)
+
+            # Cloudflare'ın JavaScript challenge'ını çözmesi ve çerezleri ayarlaması için bekle
+            # Toplam 30 saniye içinde belirli çerezlerin oluşmasını kontrol et
+            max_wait_time = 30 # saniye
+            poll_interval = 2 # saniye
+
+            found_cf_cookies = False
+            start_time = time.time()
+
+            while time.time() - start_time < max_wait_time:
+                current_cookies = driver.get_cookies()
+                # cf_clearance veya __cf_bm çerezlerinden biri varsa başarılı say
+                if any(c['name'] == 'cf_clearance' or c['name'] == '__cf_bm' for c in current_cookies):
+                    self.cf_cookies = {cookie['name']: cookie['value'] for cookie in current_cookies}
+                    found_cf_cookies = True
+                    break
+                time.sleep(poll_interval) # Belirtilen aralıklarla kontrol et
+
+            if not found_cf_cookies:
+                print(f"Cloudflare aşma başarısız: {max_wait_time} saniye içinde gerekli Cloudflare çerezleri bulunamadı.")
+                return False
 
             print(f"Cloudflare aşma başarılı. Çerezler alındı: {self.cf_cookies}")
             return True
