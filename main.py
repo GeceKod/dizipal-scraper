@@ -17,7 +17,7 @@ async def main():
 
     # "Yeni Eklenen Bölümler"i \u00E7ek (Kotlin kodundaki varsay\u0131lan kategori)
     print("\n--- Yeni Eklenen B\u00F6l\u00FCmler ---")
-    latest_episodes = await dizipal_scraper.get_home_content(request_name="Yeni Eklenen Bölümler")
+    latest_episodes = await dizipal_scraper.get_main_page_content(request_name="Yeni Eklenen Bölümler")
     
     all_m3u8_links = []
     processed_urls = set() # Duplicate i\u00E7in
