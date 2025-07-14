@@ -102,20 +102,17 @@ class DizipalScraper:
         
         for link_tag in links:
             try:
-                # --- GÜNCELLENEN KISIM BAŞLANGICI ---
                 raw_href = link_tag.get('href')
-                # .find() metodu .select_first() ile aynı işi yapar ve daha temeldir.
                 img_tag = link_tag.find("img")
                 
-                # Eğer <a> etiketi veya içindeki <img> etiketi düzgün değilse bu döngü adımını atla
                 if not raw_href or not img_tag:
                     continue
 
-                # Kotlin kodundaki link düzeltme mantığı
-                if "/bolum/" in raw_href:
-                    href = re.sub(r"-[0-9]+x.*$", "", raw_href.replace("/bolum/", "/series/"))
-                else:
-                    href = raw_href
+                # --- GÜNCELLENEN KISIM ---
+                # Hatalı olan /bolum/ -> /series/ dönüştürmesi kaldırıldı.
+                # Artık ham bölüm linkini doğrudan kullanıyoruz.
+                href = raw_href
+                # --- GÜNCELLEME SONU ---
                 
                 full_url = href if href.startswith('http') else self.main_url + href
                 
@@ -127,10 +124,7 @@ class DizipalScraper:
                 full_title = f"{title_alt} {title_text}".strip()
                 
                 home_results.append({"title": full_title, "url": full_url})
-                # --- GÜNCELLENEN KISIM SONU ---
             except Exception as e:
-                # Eğer döngüdeki bir elemanda beklenmedik bir hata olursa
-                # programın çökmesini engelle, hatayı yazdır ve devam et.
                 print(f"Uyarı: Bir bölüm işlenirken hata oluştu, atlanıyor. Hata: {e}")
                 continue
             
@@ -165,6 +159,6 @@ class DizipalScraper:
 
             decrypted_url = self._decrypt_aes(salt, iv, ciphertext)
             return decrypted_url
-        except Exception as e:
+                except Exception as e:
             print(f"Şifreli veri işlenirken hata oluştu: {e}")
             return None
