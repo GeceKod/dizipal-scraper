@@ -28,7 +28,7 @@ jobs:
 
       - name: Scraper'ı Çalıştır
         # Python scriptinin \u00E7\u0131kt\u0131s\u0131n\u0131 bir dosyaya y\u00F6nlendir
-        run: python main.py
+        run: python -u main.py
 
       - name: m3u8 Linklerini Artifact Olarak Yükle
         uses: actions/upload-artifact@v4
