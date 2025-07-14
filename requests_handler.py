@@ -21,8 +21,8 @@ class RequestHandler:
         # Proxy ayarlarını buraya ekliyoruz
         # Kullanıcının belirttiği adres: socks5://149.86.137.246:10820
         self.session.proxies = {
-            'http': 'socks5://149.86.137.246:10820',
-            'https': 'socks5://149.86.137.246:10820'
+            'http': 'socks4://176.235.182.90:1080',
+            'https': 'socks4://176.235.182.90:1080'
         }
 
     def _bypass_cloudflare(self, url):
@@ -43,7 +43,7 @@ class RequestHandler:
         
         # Selenium WebDriver'ın da proxy kullanması için bu kısım önemlidir
         # Chromium tabanlı tarayıcılarda --proxy-server argümanı kullanılır
-        options.add_argument(f'--proxy-server=socks5://149.86.137.246:10820')
+        options.add_argument(f'--proxy-server=socks4://176.235.182.90:1080')
 
 
         driver = None # Hata durumunda driver'ı kapatabilmek için
