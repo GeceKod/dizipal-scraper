@@ -107,12 +107,8 @@ class DizipalScraper:
                 
                 if not raw_href or not img_tag:
                     continue
-
-                # --- GÜNCELLENEN KISIM ---
-                # Hatalı olan /bolum/ -> /series/ dönüştürmesi kaldırıldı.
-                # Artık ham bölüm linkini doğrudan kullanıyoruz.
+                
                 href = raw_href
-                # --- GÜNCELLEME SONU ---
                 
                 full_url = href if href.startswith('http') else self.main_url + href
                 
@@ -159,6 +155,8 @@ class DizipalScraper:
 
             decrypted_url = self._decrypt_aes(salt, iv, ciphertext)
             return decrypted_url
-                except Exception as e:
+        # --- DÜZELTİLEN KISIM ---
+        # Bu 'except' bloğunun girintisi bir seviye geri çekilerek düzeltildi.
+        except Exception as e:
             print(f"Şifreli veri işlenirken hata oluştu: {e}")
             return None
