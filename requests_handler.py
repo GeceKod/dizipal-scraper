@@ -31,7 +31,7 @@ class RequestHandler:
         }
 
     def _bypass_cloudflare(self, url):
-        print(f"Cloudflare aşıma girişimi: {url} (Selenium ile)...")
+        print(f"Cloudflare aşıma girişimi: {url} (Selenium ile)...", flush=True)
         options = ChromeOptions()
         options.add_argument("--headless")
         options.add_argument("--disable-gpu")
@@ -75,20 +75,20 @@ class RequestHandler:
                 time.sleep(poll_interval)
 
             if not found_cf_cookies:
-                print(f"Cloudflare aşma başarısız: {max_wait_time} saniye içinde gerekli Cloudflare çerezleri bulunamadı.")
+                print(f"Cloudflare aşma başarısız: {max_wait_time} saniye içinde gerekli Cloudflare çerezleri bulunamadı.", flush=True)
                 return False
 
-            print(f"Cloudflare aşma başarılı. Çerezler alındı: {self.cf_cookies}")
+            print(f"Cloudflare aşma başarılı. Çerezler alındı: {self.cf_cookies}", flush=True)
             return True
         except Exception as e:
-            print(f"Cloudflare aşma başarısız oldu: {e}")
+            print(f"Cloudflare aşma başarısız oldu: {e}", flush=True)
             return False
         finally:
             if driver:
                 driver.quit()
 
     def _bypass_ddos_guard(self, url):
-        print(f"DDoS-Guard aşıma girişimi: {url}...")
+        print(f"DDoS-Guard aşıma girişimi: {url}...", flush=True)
         try:
             check_js_url = "https://check.ddos-guard.net/check.js"
             js_response = self.session.get(check_js_url, timeout=10)
@@ -99,17 +99,17 @@ class RequestHandler:
                 bypass_path = match.group(1)
                 bypass_url = f"https://{requests.utils.urlparse(url).netloc}{bypass_path}"
                 
-                print(f"DDoS-Guard bypass URL'si: {bypass_url}")
+                print(f"DDoS-Guard bypass URL'si: {bypass_url}", flush=True)
                 bypass_response = self.session.get(bypass_url, timeout=10)
                 bypass_response.raise_for_status()
 
-                print(f"DDoS-Guard aşma başarılı. Çerezler alındı: {self.session.cookies.get_dict()}")
+                print(f"DDoS-Guard aşma başarılı. Çerezler alındı: {self.session.cookies.get_dict()}", flush=True)
                 return True
             else:
-                print("DDoS-Guard bypass path'i bulunamadı.")
+                print("DDoS-Guard bypass path'i bulunamadı.", flush=True)
                 return False
         except Exception as e:
-            print(f"DDoS-Guard aşma başarısız oldu: {e}")
+            print(f"DDoS-Guard aşma başarısız oldu: {e}", flush=True)
             return False
 
     def get(self, url, headers=None, allow_redirects=True, timeout=30, handle_protection=False):
@@ -128,29 +128,29 @@ class RequestHandler:
 
                 if handle_protection and (response.status_code == 403 or response.status_code == 503):
                     # ... Koruma aşma mantığı aynı kalır ...
-                    print(f"Koruma tespit edildi {url}. Aşma deneniyor...")
+                    print(f"Koruma tespit edildi {url}. Aşma deneniyor...", flush=True)
                     bypass_successful = False
 
                     if self._bypass_cloudflare(url):
-                        print(f"Cloudflare aşma başarılı: {url}. Orijinal istek tekrarlanıyor...")
+                        print(f"Cloudflare aşma başarılı: {url}. Orijinal istek tekrarlanıyor...", flush=True)
                         if self.cf_cookies:
                             cookie_header = "; ".join([f"{name}={value}" for name, value in self.cf_cookies.items()])
                             self.session.headers.update({'Cookie': cookie_header})
                         response = self.session.get(url, allow_redirects=allow_redirects, timeout=timeout)
                         bypass_successful = True
                     else:
-                        print(f"Cloudflare aşma başarısız oldu: {url}.")
+                        print(f"Cloudflare aşma başarısız oldu: {url}.", flush=True)
 
                     if not bypass_successful:
                         if self._bypass_ddos_guard(url):
-                            print(f"DDoS-Guard aşma başarılı: {url}. Orijinal istek tekrarlanıyor...")
+                            print(f"DDoS-Guard aşma başarılı: {url}. Orijinal istek tekrarlanıyor...", flush=True)
                             response = self.session.get(url, allow_redirects=allow_redirects, timeout=timeout)
                             bypass_successful = True
                         else:
-                            print(f"DDoS-Guard aşma başarısız oldu: {url}.")
+                            print(f"DDoS-Guard aşma başarısız oldu: {url}.", flush=True)
 
                     if not bypass_successful:
-                        print(f"Hiçbir koruma aşma girişimi başarılı olamadı: {url}.")
+                        print(f"Hiçbir koruma aşma girişimi başarılı olamadı: {url}.", flush=True)
                         response.raise_for_status()
                         return None
 
@@ -158,12 +158,12 @@ class RequestHandler:
                 return response
 
             except requests.exceptions.RequestException as e:
-                print(f"GET isteği denemesi {attempt + 1}/{max_retries + 1} başarısız oldu: {url}")
+                print(f"GET isteği denemesi {attempt + 1}/{max_retries + 1} başarısız oldu: {url}", flush=True)
                 if attempt < max_retries:
-                    print(f"Hata: {e}. {retry_delay} saniye beklenip tekrar denenecek...")
+                    print(f"Hata: {e}. {retry_delay} saniye beklenip tekrar denenecek...", flush=True)
                     time.sleep(retry_delay)
                 else:
-                    print("Maksimum deneme sayısına ulaşıldı. İstek kalıcı olarak başarısız oldu.")
+                    print("Maksimum deneme sayısına ulaşıldı. İstek kalıcı olarak başarısız oldu.", flush=True)
                     return None
         return None
 
@@ -185,12 +185,12 @@ class RequestHandler:
                 return response
             
             except requests.exceptions.RequestException as e:
-                print(f"POST isteği denemesi {attempt + 1}/{max_retries + 1} başarısız oldu: {url}")
+                print(f"POST isteği denemesi {attempt + 1}/{max_retries + 1} başarısız oldu: {url}", flush=True)
                 if attempt < max_retries:
-                    print(f"Hata: {e}. {retry_delay} saniye beklenip tekrar denenecek...")
+                    print(f"Hata: {e}. {retry_delay} saniye beklenip tekrar denenecek...", flush=True)
                     time.sleep(retry_delay)
                 else:
-                    print("Maksimum deneme sayısına ulaşıldı. İstek kalıcı olarak başarısız oldu.")
+                    print("Maksimum deneme sayısına ulaşıldı. İstek kalıcı olarak başarısız oldu.", flush=True)
                     return None
         return None
 
