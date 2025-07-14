@@ -23,7 +23,7 @@ class RequestHandler:
         proxy_port = "6297"
         
         # requests kütüphanesi için proxy URL formatı
-        proxy_url = f"socks5://149.86.137.246:10820}"
+        proxy_url = f"socks5://149.86.137.246:10820"
 
         self.session.proxies = {
             'http': proxy_url,
