@@ -42,10 +42,8 @@ class DizipalScraper:
 
             # PKCS#7 (veya PKCS#5) padding'i kaldır
             pad_len = padded_data[-1]
-            # Padding uzunluğunun geçerli bir aralıkta olduğundan emin ol
             if not 1 <= pad_len <= 16:
                 raise ValueError("Geçersiz padding uzunluğu.")
-            # Padding'in doğru olup olmadığını kontrol et
             if not all(p == pad_len for p in padded_data[-pad_len:]):
                 raise ValueError("Geçersiz padding.")
             
@@ -90,7 +88,6 @@ class DizipalScraper:
         if "Yeni Eklenen Bölümler" in request_name:
              response = request_handler.get(self.main_url, headers=headers)
         else:
-            # Diğer POST istekleri için ortak mantık (henüz tam implemente edilmedi)
             print(f"'{request_name}' için listeleme mantığı henüz eklenmedi.")
             return []
 
@@ -101,33 +98,41 @@ class DizipalScraper:
         soup = BeautifulSoup(response.text, 'html.parser')
         home_results = []
         
-        # Sadece "Yeni Eklenen Bölümler" için Kotlin'deki seçiciyi kullanıyoruz
-        # div.overflow-auto içindeki a etiketleri
         links = soup.select("div.overflow-auto a")
         
         for link_tag in links:
-            raw_href = link_tag.get('href')
-            img_tag = link_tag.select_first("img")
-            if not raw_href or not img_tag:
-                continue
+            try:
+                # --- GÜNCELLENEN KISIM BAŞLANGICI ---
+                raw_href = link_tag.get('href')
+                # .find() metodu .select_first() ile aynı işi yapar ve daha temeldir.
+                img_tag = link_tag.find("img")
+                
+                # Eğer <a> etiketi veya içindeki <img> etiketi düzgün değilse bu döngü adımını atla
+                if not raw_href or not img_tag:
+                    continue
 
-            # Kotlin kodundaki link düzeltme mantığı
-            # Örn: /bolum/the-boys-1-sezon-1-bolum -> /series/the-boys
-            if "/bolum/" in raw_href:
-                href = re.sub(r"-[0-9]+x.*$", "", raw_href.replace("/bolum/", "/series/"))
-            else:
-                href = raw_href
-            
-            full_url = href if href.startswith('http') else self.main_url + href
-            
-            # Başlık oluşturma
-            title_alt = img_tag.get('alt', '').strip()
-            title_text_element = link_tag.select_first("div.text.block div.text-white.text-sm")
-            title_text = title_text_element.text.strip() if title_text_element else ""
-            
-            full_title = f"{title_alt} {title_text}".strip()
-            
-            home_results.append({"title": full_title, "url": full_url})
+                # Kotlin kodundaki link düzeltme mantığı
+                if "/bolum/" in raw_href:
+                    href = re.sub(r"-[0-9]+x.*$", "", raw_href.replace("/bolum/", "/series/"))
+                else:
+                    href = raw_href
+                
+                full_url = href if href.startswith('http') else self.main_url + href
+                
+                # Başlık oluşturma
+                title_alt = img_tag.get('alt', '').strip()
+                title_text_element = link_tag.find("div", class_="text-white")
+                title_text = title_text_element.text.strip() if title_text_element else ""
+                
+                full_title = f"{title_alt} {title_text}".strip()
+                
+                home_results.append({"title": full_title, "url": full_url})
+                # --- GÜNCELLENEN KISIM SONU ---
+            except Exception as e:
+                # Eğer döngüdeki bir elemanda beklenmedik bir hata olursa
+                # programın çökmesini engelle, hatayı yazdır ve devam et.
+                print(f"Uyarı: Bir bölüm işlenirken hata oluştu, atlanıyor. Hata: {e}")
+                continue
             
         return home_results
     
