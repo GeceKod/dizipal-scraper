@@ -1,15 +1,21 @@
 import re
 from requests_handler import request_handler
 import json
+from urllib.parse import urlparse # Dinamik URL oluşturmak için eklendi
 
 class ContentXExtractor:
     def __init__(self):
-        self.main_url = "https://contentx.me"  # Bu extractor'ın ana URL'i
+        # Artık sabit bir ana URL'e ihtiyacımız yok, dinamik olarak alacağız.
         self.requires_referer = True
 
     async def get_m3u8_link(self, url, referer):
-        """ContentX linkinden M3U8 video linkini çeker."""
+        """ContentX ve türevlerinden M3U8 video linkini çeker."""
         print(f"  -> ContentX Extractor çalışıyor: {url}")
+        
+        # Gelen URL'den ana alan adını dinamik olarak al (örn: https://four.dplayer82.site)
+        parsed_url = urlparse(url)
+        main_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
         ext_ref = referer if referer else ""
         headers = {"Referer": ext_ref, "User-Agent": request_handler.user_agent}
 
@@ -27,7 +33,7 @@ class ContentXExtractor:
         i_extract = i_extract_match.group(1)
 
         # Adım 2: source2.php'den video kaynağını al
-        source2_url = f"{self.main_url}/source2.php?v={i_extract}"
+        source2_url = f"{main_url}/source2.php?v={i_extract}"
         print(f"     Video kaynağı çekiliyor: {source2_url}")
         vid_source_resp = request_handler.get(source2_url, headers=headers)
         if not vid_source_resp:
@@ -48,9 +54,8 @@ class ContentXExtractor:
         dublaj_match = re.search(r',("([^"]+)","Türkçe")', i_source_text)
         if dublaj_match:
             try:
-                # JSON'dan kaçırılmış olabilecek string'i düzelt
                 dublaj_id = json.loads(dublaj_match.group(1))
-                dublaj_source2_url = f"{self.main_url}/source2.php?v={dublaj_id}"
+                dublaj_source2_url = f"{main_url}/source2.php?v={dublaj_id}"
                 print(f"     Dublaj kaynağı çekiliyor: {dublaj_source2_url}")
                 dublaj_vid_source_resp = request_handler.get(dublaj_source2_url, headers=headers)
                 if dublaj_vid_source_resp:
