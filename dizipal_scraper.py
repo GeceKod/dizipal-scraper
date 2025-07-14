@@ -50,14 +50,14 @@ class DizipalScraper:
             decrypted_content = padded_data[:-pad_len]
             return decrypted_content.decode('utf-8')
         except Exception as e:
-            print(f"Şifre çözme başarısız oldu: {e}")
+            print(f"Şifre çözme başarısız oldu: {e}", flush=True)
             return None
 
     async def init_session(self):
         if self.cKey and self.cValue:
-            print("Oturum zaten başlatıldı.")
+            print("Oturum zaten başlatıldı.", flush=True)
             return True
-        print("🔄 Oturum başlatılıyor: çerezler, cKey ve cValue alınıyor...")
+        print("🔄 Oturum başlatılıyor: çerezler, cKey ve cValue alınıyor...", flush=True)
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "User-Agent": request_handler.user_agent,
@@ -65,7 +65,7 @@ class DizipalScraper:
         }
         resp = request_handler.get(self.main_url, headers=headers, timeout=120, handle_protection=True)
         if not resp:
-            print("Dizipal ana sayfası alınamadı.")
+            print("Dizipal ana sayfası alınamadı.", flush=True)
             return False
         soup = BeautifulSoup(resp.text, 'html.parser')
         c_key_input = soup.select_one("input[name=cKey]")
@@ -73,10 +73,10 @@ class DizipalScraper:
         if c_key_input and c_value_input:
             self.cKey = c_key_input.get('value')
             self.cValue = c_value_input.get('value')
-            print(f"cKey: {self.cKey}, cValue: {self.cValue}")
+            print(f"cKey: {self.cKey}, cValue: {self.cValue}", flush=True)
             return True
         else:
-            print("cKey veya cValue sayfada bulunamadı.")
+            print("cKey veya cValue sayfada bulunamadı.", flush=True)
             return False
 
     async def get_main_page_content(self, page=1, request_name="Yeni Eklenen Bölümler"):
@@ -88,11 +88,11 @@ class DizipalScraper:
         if "Yeni Eklenen Bölümler" in request_name:
              response = request_handler.get(self.main_url, headers=headers)
         else:
-            print(f"'{request_name}' için listeleme mantığı henüz eklenmedi.")
+            print(f"'{request_name}' için listeleme mantığı henüz eklenmedi.", flush=True)
             return []
 
         if not response:
-            print(f"İçerik alınamadı: {request_name}")
+            print(f"İçerik alınamadı: {request_name}", flush=True)
             return []
 
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -121,26 +121,26 @@ class DizipalScraper:
                 
                 home_results.append({"title": full_title, "url": full_url})
             except Exception as e:
-                print(f"Uyarı: Bir bölüm işlenirken hata oluştu, atlanıyor. Hata: {e}")
+                print(f"Uyarı: Bir bölüm işlenirken hata oluştu, atlanıyor. Hata: {e}", flush=True)
                 continue
             
         return home_results
     
     async def get_player_url(self, episode_url):
         """Verilen bölüm URL'inden şifrelenmiş oynatıcı URL'ini çözer."""
-        print(f"Oynatıcı URL'i alınıyor: {episode_url}")
+        print(f"Oynatıcı URL'i alınıyor: {episode_url}", flush=True)
         headers = {"Referer": self.main_url, "User-Agent": request_handler.user_agent}
         resp = request_handler.get(episode_url, headers=headers)
         
         if not resp:
-            print(f"Bölüm sayfası alınamadı: {episode_url}")
+            print(f"Bölüm sayfası alınamadı: {episode_url}", flush=True)
             return None
 
         soup = BeautifulSoup(resp.text, 'html.parser')
         hidden_div = soup.select_one("div[data-rm-k]")
         
         if not (hidden_div and hidden_div.text):
-            print("Sayfada şifreli veri (div[data-rm-k]) bulunamadı.")
+            print("Sayfada şifreli veri (div[data-rm-k]) bulunamadı.", flush=True)
             return None
         
         try:
@@ -150,7 +150,7 @@ class DizipalScraper:
             salt = json_data.get("salt")
             
             if not all([ciphertext, iv, salt]):
-                print("JSON veri içinde gerekli anahtarlar (ciphertext, iv, salt) eksik.")
+                print("JSON veri içinde gerekli anahtarlar (ciphertext, iv, salt) eksik.", flush=True)
                 return None
 
             decrypted_url = self._decrypt_aes(salt, iv, ciphertext)
@@ -158,5 +158,5 @@ class DizipalScraper:
         # --- DÜZELTİLEN KISIM ---
         # Bu 'except' bloğunun girintisi bir seviye geri çekilerek düzeltildi.
         except Exception as e:
-            print(f"Şifreli veri işlenirken hata oluştu: {e}")
+            print(f"Şifreli veri işlenirken hata oluştu: {e}", flush=True)
             return None
