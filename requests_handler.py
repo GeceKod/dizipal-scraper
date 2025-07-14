@@ -157,7 +157,7 @@ class RequestHandler:
     def post(self, url, data=None, headers=None, allow_redirects=True, timeout=30):
         # --- YENİ EKLENEN KISIM BAŞLANGICI ---
         max_retries = 3
-        retry_delay = 5
+        retry_delay = 1
         for attempt in range(max_retries + 1):
         # --- YENİ EKLENEN KISIM SONU ---
             try:
