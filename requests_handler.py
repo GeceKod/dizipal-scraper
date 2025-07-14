@@ -16,6 +16,13 @@ class RequestHandler:
         self.cf_cookies = {}
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0"
 
+        # ## DEĞİŞİKLİK: Proxy ayarları geri eklendi ##
+        # 'socks5h' DNS çözümlemesinin de proxy üzerinden yapılmasını sağlar.
+        self.session.proxies = {
+            'http': 'socks5://185.87.121.35:8975',
+            'https': 'socks5://185.87.121.35:8975'
+        }
+
     def _bypass_cloudflare(self, url):
         print(f"Cloudflare aşıma girişimi: {url} (Selenium ile)...")
         options = ChromeOptions()
@@ -29,6 +36,9 @@ class RequestHandler:
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
+        
+        # ## DEĞİŞİKLİK: Selenium için proxy ayarı geri eklendi ##
+        options.add_argument(f'--proxy-server=socks5://185.87.121.35:8975')
         
         driver = None
         try:
@@ -96,11 +106,9 @@ class RequestHandler:
             return False
 
     def get(self, url, headers=None, allow_redirects=True, timeout=30, handle_protection=False):
-        # --- YENİ EKLENEN KISIM BAŞLANGICI ---
         max_retries = 3
         retry_delay = 5
-        for attempt in range(max_retries + 1): # 1 ilk deneme + 3 tekrar deneme
-        # --- YENİ EKLENEN KISIM SONU ---
+        for attempt in range(max_retries + 1):
             try:
                 if headers:
                     self.session.headers.update(headers)
@@ -112,6 +120,7 @@ class RequestHandler:
                 response = self.session.get(url, allow_redirects=allow_redirects, timeout=timeout)
 
                 if handle_protection and (response.status_code == 403 or response.status_code == 503):
+                    # ... Koruma aşma mantığı aynı kalır ...
                     print(f"Koruma tespit edildi {url}. Aşma deneniyor...")
                     bypass_successful = False
 
@@ -139,9 +148,8 @@ class RequestHandler:
                         return None
 
                 response.raise_for_status()
-                return response # İstek başarılı olursa döngüden çık ve yanıtı döndür
+                return response
 
-            # --- YENİ EKLENEN KISIM BAŞLANGICI ---
             except requests.exceptions.RequestException as e:
                 print(f"GET isteği denemesi {attempt + 1}/{max_retries + 1} başarısız oldu: {url}")
                 if attempt < max_retries:
@@ -150,16 +158,13 @@ class RequestHandler:
                 else:
                     print("Maksimum deneme sayısına ulaşıldı. İstek kalıcı olarak başarısız oldu.")
                     return None
-            # --- YENİ EKLENEN KISIM SONU ---
         return None
 
 
     def post(self, url, data=None, headers=None, allow_redirects=True, timeout=30):
-        # --- YENİ EKLENEN KISIM BAŞLANGICI ---
         max_retries = 3
-        retry_delay = 1
+        retry_delay = 5
         for attempt in range(max_retries + 1):
-        # --- YENİ EKLENEN KISIM SONU ---
             try:
                 if headers:
                     self.session.headers.update(headers)
@@ -170,9 +175,8 @@ class RequestHandler:
 
                 response = self.session.post(url, data=data, allow_redirects=allow_redirects, timeout=timeout)
                 response.raise_for_status()
-                return response # İstek başarılı olursa döngüden çık ve yanıtı döndür
+                return response
             
-            # --- YENİ EKLENEN KISIM BAŞLANGICI ---
             except requests.exceptions.RequestException as e:
                 print(f"POST isteği denemesi {attempt + 1}/{max_retries + 1} başarısız oldu: {url}")
                 if attempt < max_retries:
@@ -181,7 +185,6 @@ class RequestHandler:
                 else:
                     print("Maksimum deneme sayısına ulaşıldı. İstek kalıcı olarak başarısız oldu.")
                     return None
-            # --- YENİ EKLENEN KISIM SONU ---
         return None
 
 
