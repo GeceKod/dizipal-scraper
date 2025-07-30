@@ -11,7 +11,7 @@ import base64
 
 class DizipalScraper:
     def __init__(self):
-        self.main_url = "https://dizipal936.com"
+        self.main_url = "https://dizipal940.com"
         self.cKey = None
         self.cValue = None
         # Orijinal Kotlin kodundan alınan sabit şifre çözme anahtarı
