@@ -2,7 +2,7 @@ name: Dizipal M3U8 Scraper
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Her gün saat 00:00'da çalıştır (UTC)
+    - cron:   # Her gün saat 00:00'da çalıştır (UTC)
   workflow_dispatch: # GitHub arayüzünden manuel çalıştırmaya izin verir
 
 jobs:
