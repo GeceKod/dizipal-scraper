@@ -1,5 +1,0 @@
-requests
-beautifulsoup4
-selenium
-webdriver-manager
-cryptography  # AES şifre çözme için
