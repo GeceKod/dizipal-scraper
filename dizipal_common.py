@@ -31,6 +31,11 @@ CHALLENGE_MARKERS = (
     "challenges.cloudflare.com/turnstile",
     "verify you are human",
     "attention required",
+    "enable javascript and cookies to continue",
+    "cf-mitigated",
+    "too many requests",
+    "openresty",
+    "access denied",
 )
 SITE_HOST_RE = re.compile(r"^dizipal\d+\.com$", flags=re.IGNORECASE)
 TR_ASCII_MAP = str.maketrans(
@@ -313,8 +318,32 @@ def cache_entry_is_fresh(entry: dict[str, Any], config: Any) -> bool:
     return is_within_ttl(cached_at, ttl)
 
 
+def save_bootstrap_debug_artifacts(
+    config: Any,
+    log_context: str,
+    page_html: str,
+    metadata: dict[str, Any],
+    screenshot_bytes: bytes | None = None,
+) -> tuple[Path, Path, Path | None]:
+    debug_dir = config.log_file.parent / "bootstrap_debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    stamp = utc_now().strftime("%Y%m%d_%H%M%S")
+
+    safe_context = re.sub(r"[^a-z0-9_-]+", "_", log_context.casefold())
+    html_path = debug_dir / f"{safe_context}_{stamp}.html"
+    meta_path = debug_dir / f"{safe_context}_{stamp}.json"
+    screenshot_path = debug_dir / f"{safe_context}_{stamp}.png" if screenshot_bytes else None
+
+    html_path.write_text(page_html or "", encoding="utf-8")
+    meta_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    if screenshot_path and screenshot_bytes:
+        screenshot_path.write_bytes(screenshot_bytes)
+
+    return html_path, meta_path, screenshot_path
+
+
 def open_browser_target(sb: Any, target_url: str, wait_seconds: int, headless: bool) -> None:
-    reconnect_time = max(3, min(8, wait_seconds // 3 or 3))
+    reconnect_time = max(6, min(max(wait_seconds - 2, 6), 25))
     if hasattr(sb, "uc_open_with_reconnect"):
         try:
             sb.uc_open_with_reconnect(target_url, reconnect_time)
@@ -340,13 +369,15 @@ def bootstrap_session(
     log_context: str,
 ) -> tuple[dict[str, str], str, str]:
     logger.info("SeleniumBase ile %s oturumu alinacak.", log_context)
-    with SB(uc=True, headless=config.selenium_headless) as sb:
+    use_xvfb = os.name != "nt" and not config.selenium_headless
+    with SB(uc=True, headless=config.selenium_headless, xvfb=use_xvfb) as sb:
         open_browser_target(sb, target_url, config.selenium_wait_seconds, config.selenium_headless)
         deadline = time.time() + config.selenium_wait_seconds
         page_html = ""
         items: list[Any] = []
         captcha_attempted = False
         retried_open = False
+        time.sleep(3)
 
         while time.time() < deadline:
             try:
@@ -410,7 +441,45 @@ def bootstrap_session(
                 logger.info("HTTP dogrulamasi ile oturum dogrulandi. Kayit sayisi: %s", len(http_items))
                 return cookies, user_agent, http_payload.text
 
+        screenshot_bytes = None
+        try:
+            screenshot_bytes = sb.driver.get_screenshot_as_png()
+        except Exception:
+            screenshot_bytes = None
+
+        current_url = ""
+        current_title = ""
+        try:
+            current_url = getattr(sb.driver, "current_url", "") or ""
+        except Exception:
+            current_url = ""
+        try:
+            current_title = getattr(sb.driver, "title", "") or ""
+        except Exception:
+            current_title = ""
+
+        html_path, meta_path, screenshot_path = save_bootstrap_debug_artifacts(
+            config,
+            log_context,
+            page_html or http_payload.text,
+            {
+                "target_url": target_url,
+                "current_url": current_url,
+                "title": current_title,
+                "browser_item_count": len(items),
+                "browser_challenge_detected": is_cloudflare_challenge(page_html),
+                "browser_html_length": len(page_html or ""),
+                "http_status_code": http_payload.status_code,
+                "http_final_url": http_payload.final_url,
+                "http_error": http_payload.error,
+                "http_challenge_detected": is_cloudflare_challenge(http_payload.text),
+                "http_html_length": len(http_payload.text or ""),
+            },
+            screenshot_bytes=screenshot_bytes,
+        )
+        screenshot_hint = f", screenshot: {screenshot_path}" if screenshot_path else ""
         raise RuntimeError(
             f"{log_context} icin Cloudflare oturumu alinamadi. "
-            f"Son URL: {getattr(sb.driver, 'current_url', '') or target_url}"
+            f"Son URL: {current_url or target_url}. "
+            f"Debug HTML: {html_path}, meta: {meta_path}{screenshot_hint}"
         )

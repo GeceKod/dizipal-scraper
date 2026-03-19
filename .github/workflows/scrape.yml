@@ -15,7 +15,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -36,21 +36,36 @@ jobs:
       - name: Scrape series
         env:
           PYTHONUTF8: "1"
+          PYTHONUNBUFFERED: "1"
           DIZI_SELENIUM_HEADLESS: "0"
-        run: xvfb-run -a python main_dizi.py
+          DIZI_SELENIUM_WAIT: "60"
+        run: python main_dizi.py
 
       - name: Scrape movies
         env:
           PYTHONUTF8: "1"
+          PYTHONUNBUFFERED: "1"
           FILM_SELENIUM_HEADLESS: "0"
-        run: xvfb-run -a python main_film.py
+          FILM_SELENIUM_WAIT: "60"
+        run: python main_film.py
 
       - name: Merge JSON
         env:
           PYTHONUTF8: "1"
         run: python json_birlestir.py
 
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-logs
+          path: |
+            logs/
+            *.json
+          if-no-files-found: ignore
+
       - name: Commit results
+        if: success()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
