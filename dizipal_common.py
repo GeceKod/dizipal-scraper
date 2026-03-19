@@ -200,8 +200,33 @@ def build_headers(user_agent: str | None, referer: str) -> dict[str, str]:
     }
 
 
+def normalize_http_proxy(proxy: str | None) -> str:
+    proxy = clean_space(proxy)
+    if not proxy:
+        return ""
+    if "://" in proxy:
+        return proxy
+    return f"http://{proxy}"
+
+
+def normalize_browser_proxy(proxy: str | None) -> str:
+    proxy = clean_space(proxy)
+    if not proxy:
+        return ""
+    parsed = urlparse(proxy if "://" in proxy else f"http://{proxy}")
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    if not host:
+        return proxy
+    if parsed.username is not None:
+        password = parsed.password or ""
+        return f"{parsed.username}:{password}@{host}{port}"
+    return f"{host}{port}"
+
+
 def fetch_html(url: str, cookies: dict[str, str], user_agent: str, config: Any) -> FetchPayload:
     last_error = ""
+    proxy = normalize_http_proxy(getattr(config, "proxy", ""))
     for attempt in range(1, config.http_retries + 1):
         try:
             response = get_http_session().get(
@@ -211,6 +236,7 @@ def fetch_html(url: str, cookies: dict[str, str], user_agent: str, config: Any) 
                 impersonate=config.browser_impersonation,
                 timeout=config.http_timeout,
                 allow_redirects=True,
+                proxy=proxy or None,
             )
             return FetchPayload(
                 url=url,
@@ -370,7 +396,13 @@ def bootstrap_session(
 ) -> tuple[dict[str, str], str, str]:
     logger.info("SeleniumBase ile %s oturumu alinacak.", log_context)
     use_xvfb = os.name != "nt" and not config.selenium_headless
-    with SB(uc=True, headless=config.selenium_headless, xvfb=use_xvfb) as sb:
+    browser_proxy = normalize_browser_proxy(getattr(config, "proxy", ""))
+    with SB(
+        uc=True,
+        headless=config.selenium_headless,
+        xvfb=use_xvfb,
+        proxy=browser_proxy or None,
+    ) as sb:
         open_browser_target(sb, target_url, config.selenium_wait_seconds, config.selenium_headless)
         deadline = time.time() + config.selenium_wait_seconds
         page_html = ""

@@ -14,9 +14,7 @@ concurrency:
 
 jobs:
   scrape:
-    runs-on:
-      - self-hosted
-      - Windows
+    runs-on: ubuntu-latest
     timeout-minutes: 40
 
     steps:
@@ -35,12 +33,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Validate proxy secret
+        env:
+          SCRAPER_PROXY: ${{ secrets.SCRAPER_PROXY }}
+        run: |
+          if [ -z "${SCRAPER_PROXY}" ]; then
+            echo "SCRAPER_PROXY GitHub secret eksik. Hosted runner'da Cloudflare'i gecmek icin residential/datacenter disi proxy gerekli."
+            exit 1
+          fi
+
       - name: Scrape series
         env:
           PYTHONUTF8: "1"
           PYTHONUNBUFFERED: "1"
           DIZI_SELENIUM_HEADLESS: "0"
           DIZI_SELENIUM_WAIT: "60"
+          SCRAPER_PROXY: ${{ secrets.SCRAPER_PROXY }}
         run: python main_dizi.py
 
       - name: Scrape movies
@@ -49,6 +57,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
           FILM_SELENIUM_HEADLESS: "0"
           FILM_SELENIUM_WAIT: "60"
+          SCRAPER_PROXY: ${{ secrets.SCRAPER_PROXY }}
         run: python main_film.py
 
       - name: Merge JSON

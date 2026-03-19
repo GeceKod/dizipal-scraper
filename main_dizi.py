@@ -72,6 +72,7 @@ class AppConfig:
     tmdb_error_ttl: timedelta
     browser_impersonation: str
     tmdb_api_key: str
+    proxy: str
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,7 @@ def load_config() -> AppConfig:
         tmdb_error_ttl=timedelta(hours=int(os.getenv("DIZI_TMDB_ERROR_TTL_HOURS", "6"))),
         browser_impersonation=os.getenv("DIZI_IMPERSONATE", "chrome131"),
         tmdb_api_key=os.getenv("TMDB_API_KEY", "48ce82f1de91232f542660e99a9d1336"),
+        proxy=os.getenv("DIZI_PROXY") or os.getenv("SCRAPER_PROXY", ""),
     )
 
 
